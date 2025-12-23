@@ -86,6 +86,7 @@ jobs:
               { name: 'PR Title Validation', env_key: 'PR_TITLE_CHECK_ID' },
               { name: 'Conventional Commits', env_key: 'COMMITLINT_CHECK_ID' },
               { name: 'Code Quality', env_key: 'LINT_CHECK_ID' },
+              { name: 'Markdown', env_key: 'MARKDOWNLINT_CHECK_ID' },
               { name: 'Tests', env_key: 'TEST_CHECK_ID' }
             ];
             for (const check of checks) {
@@ -208,6 +209,50 @@ jobs:
               }
             });
 
+      - name: Run Markdownlint
+        id: markdownlint
+        continue-on-error: true
+        run: |
+          set +e
+          ${{ steps.pm.outputs.exec }} markdownlint-cli2 --config './lib/configs/.markdownlint-cli2.jsonc' 2>&1 | tee /tmp/markdownlint-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Update Markdownlint Check
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const ok = '${{ steps.markdownlint.outputs.exit_code }}' === '0';
+            let annotations = [];
+            try {
+              const text = fs.readFileSync('/tmp/markdownlint-output.txt', 'utf8');
+              const regex = /^([^:]+):(\d+)(?::(\d+))?\s+(error|warning)\s+(\S+)\s+(.+)$/gm;
+              let match;
+              while ((match = regex.exec(text)) !== null && annotations.length < 50) {
+                annotations.push({
+                  path: match[1],
+                  start_line: parseInt(match[2], 10),
+                  end_line: parseInt(match[2], 10),
+                  start_column: match[3] ? parseInt(match[3], 10) : undefined,
+                  annotation_level: match[4] === 'error' ? 'failure' : 'warning',
+                  message: match[6],
+                  title: match[5]
+                });
+              }
+            } catch (e) {}
+            await github.rest.checks.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              check_run_id: process.env.MARKDOWNLINT_CHECK_ID,
+              status: 'completed', conclusion: ok ? 'success' : 'failure',
+              output: {
+                title: ok ? 'Passed' : `Failed (${annotations.length} issues)`,
+                summary: ok ? 'All markdown files valid' : `Found ${annotations.length} issue(s)`,
+                annotations: annotations.length > 0 ? annotations : undefined
+              }
+            });
+
       - name: Run Tests
         id: test
         continue-on-error: true
@@ -281,7 +326,7 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const names = ['PR Title Validation', 'Conventional Commits', 'Code Quality', 'Tests', 'Claude Code Review'];
+            const names = ['PR Title Validation', 'Conventional Commits', 'Code Quality', 'Markdown', 'Tests', 'Claude Code Review'];
             const { data } = await github.rest.checks.listForRef({
               owner: context.repo.owner, repo: context.repo.repo,
               ref: context.payload.pull_request.head.sha
