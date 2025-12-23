@@ -167,8 +167,8 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          biome ci .
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
+          biome ci . --reporter=github 2>&1 | tee /tmp/biome-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
 
       - name: Update Lint Check
         if: always()
@@ -176,12 +176,36 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const fs = require('fs');
             const ok = '${{ steps.lint.outputs.exit_code }}' === '0';
+            let annotations = [];
+            let text = '';
+            try {
+              text = fs.readFileSync('/tmp/biome-output.txt', 'utf8').trim();
+              const regex = /^::(error|warning)\s+file=([^,]+),line=(\d+)(?:,col=(\d+))?(?:,endLine=(\d+))?(?:,endColumn=(\d+))?(?:,title=([^:]+))?::(.+)$/gm;
+              let match;
+              while ((match = regex.exec(text)) !== null && annotations.length < 50) {
+                annotations.push({
+                  path: match[2],
+                  start_line: parseInt(match[3], 10),
+                  end_line: match[5] ? parseInt(match[5], 10) : parseInt(match[3], 10),
+                  start_column: match[4] ? parseInt(match[4], 10) : undefined,
+                  end_column: match[6] ? parseInt(match[6], 10) : undefined,
+                  annotation_level: match[1] === 'error' ? 'failure' : 'warning',
+                  message: match[8],
+                  title: match[7] || 'Biome'
+                });
+              }
+            } catch (e) {}
             await github.rest.checks.update({
               owner: context.repo.owner, repo: context.repo.repo,
               check_run_id: process.env.LINT_CHECK_ID,
               status: 'completed', conclusion: ok ? 'success' : 'failure',
-              output: { title: ok ? 'Passed' : 'Failed', summary: ok ? 'All checks passed' : 'Biome found issues' }
+              output: {
+                title: ok ? 'Passed' : `Failed (${annotations.length} issues)`,
+                summary: ok ? 'All checks passed' : `Biome found ${annotations.length} issue(s)`,
+                annotations: annotations.length > 0 ? annotations : undefined
+              }
             });
 
       - name: Run Tests
