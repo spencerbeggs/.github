@@ -326,7 +326,6 @@ jobs:
           permission-pull-requests: write
           permission-issues: write
           permission-checks: write
-          permission-statuses: write
 
       - name: Check if Claude is configured
         id: check-config
