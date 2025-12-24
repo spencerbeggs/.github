@@ -7,12 +7,32 @@ on:
         description: Run in dry-run mode (preview only)
         type: boolean
         default: false
+      app-bot-name:
+        description: GitHub App bot login name (e.g., 'my-app[bot]')
+        type: string
+        required: false
+      app-bot-id:
+        description: GitHub App bot ID for Claude Code Action
+        type: string
+        required: false
+      skip-claude-review:
+        description: Skip Claude Code review for this run
+        type: boolean
+        default: false
+      claude-review-allowed-bots:
+        description: Comma-separated list of bot names allowed to trigger review, or "*" for all
+        type: string
+        default: "*"
     secrets:
       APP_ID:
         required: true
       APP_PRIVATE_KEY:
         required: true
       SAVVYWEB_NPM_AUTH_TOKEN:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      CLAUDE_REVIEW_PAT:
         required: false
 
 jobs:
@@ -63,6 +83,10 @@ jobs:
     with:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
+      app-bot-name: ${{ inputs.app-bot-name }}
+      app-bot-id: ${{ inputs.app-bot-id }}
+      skip-claude-review: ${{ inputs.skip-claude-review }}
+      claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
     secrets: inherit
 
   publish:
