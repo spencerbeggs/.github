@@ -206,19 +206,34 @@ jobs:
             let text = '';
             try {
               text = fs.readFileSync('/tmp/biome-output.txt', 'utf8').trim();
-              const regex = /^::(error|warning)\s+file=([^,]+),line=(\d+)(?:,col=(\d+))?(?:,endLine=(\d+))?(?:,endColumn=(\d+))?(?:,title=([^:]+))?::(.+)$/gm;
+              // Parse GitHub workflow commands - fields can be in any order
+              // Format: ::error file=path,line=N,endLine=N,col=N,endColumn=N,title=...::message
+              const lineRegex = /^::(error|warning)\s+(.+)::(.+)$/gm;
               let match;
-              while ((match = regex.exec(text)) !== null && annotations.length < 50) {
-                annotations.push({
-                  path: match[2],
-                  start_line: parseInt(match[3], 10),
-                  end_line: match[5] ? parseInt(match[5], 10) : parseInt(match[3], 10),
-                  start_column: match[4] ? parseInt(match[4], 10) : undefined,
-                  end_column: match[6] ? parseInt(match[6], 10) : undefined,
-                  annotation_level: match[1] === 'error' ? 'failure' : 'warning',
-                  message: match[8],
-                  title: match[7] || 'Biome'
-                });
+              while ((match = lineRegex.exec(text)) !== null && annotations.length < 50) {
+                const level = match[1];
+                const params = match[2];
+                const message = match[3];
+                // Parse key=value pairs (handles any order)
+                const fields = {};
+                for (const pair of params.split(',')) {
+                  const idx = pair.indexOf('=');
+                  if (idx > 0) {
+                    fields[pair.slice(0, idx)] = pair.slice(idx + 1);
+                  }
+                }
+                if (fields.file && fields.line) {
+                  annotations.push({
+                    path: fields.file,
+                    start_line: parseInt(fields.line, 10),
+                    end_line: fields.endLine ? parseInt(fields.endLine, 10) : parseInt(fields.line, 10),
+                    start_column: fields.col ? parseInt(fields.col, 10) : undefined,
+                    end_column: fields.endColumn ? parseInt(fields.endColumn, 10) : undefined,
+                    annotation_level: level === 'error' ? 'failure' : 'warning',
+                    message: message,
+                    title: fields.title || 'Biome'
+                  });
+                }
               }
             } catch (e) {}
             await github.rest.checks.update({
