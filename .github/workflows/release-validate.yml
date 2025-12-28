@@ -32,11 +32,14 @@ on:
         required: true
       APP_PRIVATE_KEY:
         required: true
-      SAVVYWEB_NPM_AUTH_TOKEN:
-        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         required: false
       CLAUDE_REVIEW_PAT:
+        required: false
+      CUSTOM_REGISTRIES:
+        description: |
+          Custom registry authentication (one per line).
+          Format: https://registry.example.com/_authToken=TOKEN
         required: false
 
 jobs:
@@ -63,8 +66,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry-run }}
-          custom-registries: |
-            https://registry.savvyweb.dev/${{ secrets.SAVVYWEB_NPM_AUTH_TOKEN }}
+          custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
 
   validate:
     name: Code Validation
@@ -75,6 +77,7 @@ jobs:
     permissions:
       contents: read
       checks: write
+
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -308,12 +311,9 @@ jobs:
       CHECK_RUN_ID: ""
       CLAUDE_COMMENT_ID: "0"
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
-      actions: read
+      contents: read
       checks: write
+      id-token: write
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -321,10 +321,10 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-actions: read
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write
+          permission-actions: read
           permission-checks: write
 
       - name: Check if Claude is configured

@@ -28,11 +28,14 @@ on:
         required: true
       APP_PRIVATE_KEY:
         required: true
-      SAVVYWEB_NPM_AUTH_TOKEN:
-        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         required: false
       CLAUDE_REVIEW_PAT:
+        required: false
+      CUSTOM_REGISTRIES:
+        description: |
+          Custom registry authentication (one per line).
+          Format: https://registry.example.com/_authToken=TOKEN
         required: false
 
 jobs:
