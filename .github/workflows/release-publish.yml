@@ -25,6 +25,11 @@ on:
           Custom registry authentication (one per line).
           Format: https://registry.example.com/_authToken=TOKEN
         required: false
+      NPM_TOKEN:
+        description: |
+          NPM access token for publishing to npmjs.org.
+          Required for first-time publishes or when OIDC isn't configured.
+        required: false
 
 jobs:
   publish:
@@ -55,3 +60,4 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry-run }}
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
