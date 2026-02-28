@@ -11,6 +11,11 @@ on:
         description: Run in dry-run mode
         type: boolean
         default: false
+      sbom-config:
+        description: SBOM metadata configuration (JSON) for NTIA-compliant SBOM generation
+        type: string
+        required: false
+        default: ""
     secrets:
       APP_ID:
         required: true
@@ -52,6 +57,7 @@ jobs:
         uses: savvy-web/workflow-runtime-action@main
 
       - name: Run release
+        id: release
         uses: savvy-web/workflow-release-action@main
         with:
           phase: ${{ inputs.phase }}
@@ -61,3 +67,13 @@ jobs:
           dry-run: ${{ inputs.dry-run }}
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
           npm-token: ${{ secrets.NPM_TOKEN }}
+          sbom-config: ${{ inputs.sbom-config }}
+
+      - name: Generate GitHub App token
+        id: app-token
+        if: steps.release.outputs.released_packages != '[]' && !inputs.dry-run
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: spencerbeggs

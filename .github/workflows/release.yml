@@ -95,6 +95,7 @@ jobs:
       app-bot-id: ${{ inputs.app-bot-id }}
       skip-claude-review: ${{ inputs.skip-claude-review }}
       claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
+      sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
     secrets: inherit
 
   publish:
@@ -105,4 +106,5 @@ jobs:
     with:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
+      sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
     secrets: inherit

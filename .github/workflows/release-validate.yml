@@ -27,6 +27,11 @@ on:
         description: Comma-separated list of bot names allowed to trigger review, or "*" for all
         type: string
         default: "*"
+      sbom-config:
+        description: SBOM metadata configuration (JSON) for NTIA-compliant SBOM generation
+        type: string
+        required: false
+        default: ""
     secrets:
       APP_ID:
         required: true
@@ -67,6 +72,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry-run }}
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
+          sbom-config: ${{ inputs.sbom-config }}
 
   validate:
     name: Code Validation
@@ -136,7 +142,7 @@ jobs:
             bun) echo "exec=bun x" >> $GITHUB_OUTPUT ;;
             pnpm) echo "exec=pnpm exec" >> $GITHUB_OUTPUT ;;
             yarn) echo "exec=yarn exec" >> $GITHUB_OUTPUT ;;
-            *) echo "exec=npx" >> $GITHUB_OUTPUT ;;
+            *) echo "exec=npx --no" >> $GITHUB_OUTPUT ;;
           esac
 
       - name: Fetch base branch
@@ -145,6 +151,8 @@ jobs:
       - name: Validate PR Title
         id: pr-title
         continue-on-error: true
+        env:
+          COMMITLINT_SKIP_DCO: "true"
         run: |
           set +e
           ${{ steps.pm.outputs.exec }} commitlint --config lib/configs/commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
@@ -436,7 +444,7 @@ jobs:
             };
 
             if (shouldSkip) {
-              params.conclusion = 'neutral';
+              params.conclusion = 'success';
             }
 
             const { data: checkRun } = await github.rest.checks.create(params);
@@ -494,7 +502,7 @@ jobs:
             const botName = '${{ inputs.app-bot-name }}';
             const claudeComment = comments.find(comment =>
               comment.user.login === botName &&
-              (comment.body.includes('## Code Review') || comment.body.includes('<!-- claude-code-review -->'))
+              (comment.body.includes('# Code Review') || comment.body.includes('<!-- claude-code-review -->'))
             );
 
             if (claudeComment) {
@@ -712,7 +720,18 @@ jobs:
 
             ### For New Issues:
             - Create pending review first: `mcp__github__pull_request_review_write(method: "create", event: omitted for pending)`
-            - Add inline comments: `mcp__github__add_comment_to_pending_review`
+            - Add inline comments using `mcp__github__add_comment_to_pending_review`:
+              ```
+              mcp__github__add_comment_to_pending_review(
+                owner: "${{ github.repository_owner }}",
+                repo: "${{ github.event.repository.name }}",
+                pullNumber: ${{ github.event.pull_request.number }},
+                path: "path/to/file.ts",
+                body: "Your comment here",
+                line: 42,
+                subjectType: "LINE"  // REQUIRED: "LINE" for line comments, "FILE" for file-level comments
+              )
+              ```
             - Submit review when done: `mcp__github__pull_request_review_write(method: "submit_pending")`
 
             ### Manage Summary Comments:
