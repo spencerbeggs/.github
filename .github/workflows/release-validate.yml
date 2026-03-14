@@ -102,6 +102,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          submodules: true
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
 
