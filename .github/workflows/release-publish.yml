@@ -40,6 +40,11 @@ jobs:
   publish:
     name: Publish Packages
     runs-on: ubuntu-latest
+    env:
+      DO_NOT_TRACK: "1"
+      TURBO_TELEMETRY_DISABLE: "1"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
     permissions:
       contents: write
       id-token: write

@@ -46,12 +46,17 @@ on:
           Custom registry authentication (one per line).
           Format: https://registry.example.com/_authToken=TOKEN
         required: false
-
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 jobs:
   pre-publish:
     name: Pre-Publish Validation
     runs-on: ubuntu-latest
     if: inputs.phase == 'validation'
+    env:
+      DO_NOT_TRACK: "1"
+      TURBO_TELEMETRY_DISABLE: "1"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     permissions:
       contents: read
       pull-requests: read
@@ -80,6 +85,7 @@ jobs:
     env:
       DO_NOT_TRACK: "1"
       TURBO_TELEMETRY_DISABLE: "1"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     permissions:
       contents: read
       checks: write
@@ -332,6 +338,9 @@ jobs:
       github.event.pull_request.user.login == 'copilot[bot]' ||
       github.event.pull_request.user.type == 'User'
     env:
+      DO_NOT_TRACK: "1"
+      TURBO_TELEMETRY_DISABLE: "1"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       CHECK_RUN_ID: ""
       CLAUDE_COMMENT_ID: "0"
     permissions:
