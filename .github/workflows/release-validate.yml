@@ -93,7 +93,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -114,7 +114,7 @@ jobs:
 
       - name: Create validation checks
         id: create-checks
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -167,7 +167,7 @@ jobs:
 
       - name: Update PR Title Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -189,7 +189,7 @@ jobs:
 
       - name: Update Commitlint Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -211,7 +211,7 @@ jobs:
 
       - name: Update Lint Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -272,7 +272,7 @@ jobs:
 
       - name: Update Markdownlint Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -316,7 +316,7 @@ jobs:
 
       - name: Update Test Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -350,7 +350,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
@@ -427,7 +427,7 @@ jobs:
 
       - name: Create Claude Review check
         id: create-check
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -464,7 +464,7 @@ jobs:
 
       - name: Update check - Starting review
         if: steps.create-check.outputs.should-skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -499,7 +499,7 @@ jobs:
       - name: Find existing Claude review comment
         if: steps.create-check.outputs.should-skip != 'true'
         id: find-comment
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -862,7 +862,7 @@ jobs:
 
       - name: Complete check - Review skipped
         if: always() && steps.create-check.outputs.should-skip == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -871,7 +871,7 @@ jobs:
 
       - name: Complete check - Review completed
         if: always() && steps.create-check.outputs.should-skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -925,14 +925,14 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-checks: write
 
       - name: Cleanup in-progress checks
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
