@@ -77,8 +77,8 @@ jobs:
       - name: Generate GitHub App token
         id: app-token
         if: steps.release.outputs.released_packages != '[]' && !inputs.dry-run
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: spencerbeggs
