@@ -24,7 +24,8 @@ on:
         type: boolean
         default: false
       claude-review-allowed-bots:
-        description: Comma-separated list of bot names allowed to trigger review, or "*" for all
+        description: Comma-separated list of bot names allowed to trigger review, or "*"
+          for all
         type: string
         default: "*"
       sbom-config:
@@ -330,7 +331,7 @@ jobs:
 
   claude-review:
     name: Claude Code Review
-    needs: [validate]
+    needs: [ validate ]
     runs-on: ubuntu-latest
     # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
     if: |
@@ -371,7 +372,8 @@ jobs:
           fi
 
       - name: Checkout repository
-        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
+        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
+          != true
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -379,7 +381,8 @@ jobs:
           persist-credentials: true
 
       - name: Check if PR only contains version/changelog changes
-        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
+        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
+          != true
         id: check-changes
         run: |
           git fetch origin ${{ github.base_ref }}
@@ -514,8 +517,20 @@ jobs:
               per_page: 100
             });
 
+            // Match by marker (preferred) but fall back to author + heading
+            // pattern, because Claude has been observed wiping the marker on
+            // update. The fallback prevents duplicate stickies in that case.
+            const isStickyComment = (c) => {
+              if (c.user.login !== botName) return false;
+              if (c.body.includes(marker)) return true;
+              if (c.body.includes('<!-- claude-review-sticky:')) return true;
+              if (c.body.includes('<!-- claude-code-review -->')) return true;
+              if (/(^|\n)\s*#\s+Code Review\b/.test(c.body)) return true;
+              return false;
+            };
+
             const matches = comments
-              .filter((c) => c.user.login === botName && c.body.includes(marker))
+              .filter(isStickyComment)
               .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
             let stickyId;
@@ -559,6 +574,9 @@ jobs:
           # github / github_comment / github_inline_comment MCP servers when their
           # tool prefixes appear in --allowedTools. See claude-code-action
           # src/mcp/install-mcp-server.ts and src/modes/agent/parse-tools.ts.
+          plugin_marketplaces: |
+            https://github.com/spencerbeggs/bot.git
+            https://github.com/savvy-web/systems.git
           claude_args: |
             --model claude-opus-4-7
             --max-turns 80
@@ -755,27 +773,38 @@ jobs:
 
             ## If No Force-Push (Normal Update):
 
-            ### For Previously Reported Issues:
+            ### For Previously Reported Issues (yours AND other reviewers'):
 
-            Check if your inline comments are still relevant by:
-            1. Reading the file at the line mentioned in your comment
-            2. Checking if the issue still exists
+            Fetch ALL inline review threads on the PR via
+            `mcp__github__get_pull_request_review_comments`. For each one,
+            regardless of author (you, GitHub Copilot `copilot[bot]`, human
+            reviewers, etc.), check whether the issue has been addressed:
 
-            **If fixed:** Reply to the existing review comment thread and mark as resolved:
+            1. Read the file at the line the thread points to.
+            2. Check if the described issue still exists in current code.
+            3. Skip threads that are already resolved (`isResolved: true`).
+
+            **If fixed:** Reply to the thread and mark it resolved. Pass the
+            *numeric comment ID* — not a literal `<comment_id>` placeholder.
+            For example, if the thread's comment id is `3166557097`:
 
             ```bash
-            bash .github/scripts/gh-pr-review.sh resolve-thread <comment_id> ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            bash .github/scripts/gh-pr-review.sh resolve-thread 3166557097 ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
             ```
 
-            Replace `<comment_id>` with the actual numeric comment ID from the review comment.
+            **If still broken:** Reply to the existing thread (do not resolve).
+            Again, substitute the numeric ID, e.g. `3166557097`:
 
-            **If still broken:** Reply to the existing thread (do not mark as resolved):
             ```bash
-            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/<comment_id>/replies \
+            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/3166557097/replies \
               -f body="⚠️ This issue persists at commit ${{ github.event.pull_request.head.sha }}."
             ```
 
-            Replace `<comment_id>` with the actual numeric comment ID.
+            Resolving threads from other reviewers (especially Copilot) is
+            important — leaving stale concerns open clutters the PR even when
+            the underlying code has been fixed. Don't resolve human reviewers'
+            threads silently if you're unsure; reply with what you observed
+            and let them confirm.
 
             ### For New Issues:
             - Create pending review first: `mcp__github__pull_request_review_write(method: "create", event: omitted for pending)`
@@ -796,8 +825,8 @@ jobs:
             ### Approving the PR
 
             When ALL of the following are true:
-            - Every previously reported issue has been resolved (you've already
-              called `resolve-thread` on each)
+            - Every previously reported issue (yours AND other reviewers') is
+              either fixed-and-resolved or no longer relevant
             - You found NO new issues in this pass
             - All required validation checks (section 1.3) are passing or neutral
 
@@ -819,8 +848,13 @@ jobs:
             **IMPORTANT - Sticky Comment (Pre-Created):**
             - The sticky review comment has already been created for you. Its ID is in the environment variable `CLAUDE_COMMENT_ID` (always a real ID, never 0).
             - **Always update this comment** via `mcp__github_comment__update_claude_comment`. Never create a new top-level review comment.
-            - **Always include the sticky marker** as the first line of the comment body, exactly:
+            - **CRITICAL — the first line of EVERY update must be exactly:**
               `<!-- claude-review-sticky:pr-${{ github.event.pull_request.number }} -->`
+              The MCP tool replaces the entire body. If you forget the marker,
+              the next workflow run cannot find this comment and will create
+              a duplicate sticky. Include it on every update without exception,
+              even if the prior body had it. Make this line the very first line
+              of the body — no leading blank lines, no other content above it.
             - **DO NOT minimize the sticky comment** — it is the persistent review surface.
 
             **Main review comment format:**
@@ -1007,7 +1041,7 @@ jobs:
 
   cleanup:
     name: Cleanup
-    needs: [validate, claude-review]
+    needs: [ validate, claude-review ]
     runs-on: ubuntu-latest
     if: always()
     permissions:
