@@ -346,6 +346,7 @@ jobs:
     permissions:
       contents: read
       checks: write
+      actions: read
       id-token: write
     steps:
       - name: Generate GitHub App token
@@ -496,32 +497,48 @@ jobs:
               }
             });
 
-      - name: Find existing Claude review comment
+      - name: Find or create sticky review comment
         if: steps.create-check.outputs.should-skip != 'true'
-        id: find-comment
+        id: sticky-comment
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const prNumber = context.payload.pull_request.number;
+            const marker = `<!-- claude-review-sticky:pr-${prNumber} -->`;
+            const botName = '${{ inputs.app-bot-name }}';
+
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number
+              issue_number: prNumber,
+              per_page: 100
             });
 
-            const botName = '${{ inputs.app-bot-name }}';
-            const claudeComment = comments.find(comment =>
-              comment.user.login === botName &&
-              (comment.body.includes('# Code Review') || comment.body.includes('<!-- claude-code-review -->'))
-            );
+            const matches = comments
+              .filter((c) => c.user.login === botName && c.body.includes(marker))
+              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-            if (claudeComment) {
-              console.log(`Found existing Claude review comment: ${claudeComment.id}`);
-              core.exportVariable('CLAUDE_COMMENT_ID', claudeComment.id);
+            let stickyId;
+            if (matches.length > 0) {
+              stickyId = matches[0].id;
+              console.log(`Found existing sticky comment: ${stickyId}`);
+              if (matches.length > 1) {
+                console.log(`Found ${matches.length - 1} duplicate sticky comment(s) — leaving for cleanup`);
+              }
             } else {
-              console.log('No existing Claude review comment found');
-              core.exportVariable('CLAUDE_COMMENT_ID', '0');
+              const { data: created } = await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `${marker}\n\n# Code Review\n\n_Review in progress…_`
+              });
+              stickyId = created.id;
+              console.log(`Created sticky comment placeholder: ${stickyId}`);
             }
+
+            core.exportVariable('CLAUDE_COMMENT_ID', stickyId);
+            core.setOutput('comment-id', stickyId);
 
       - name: Run Claude Code Review
         if: steps.create-check.outputs.should-skip != 'true'
@@ -529,7 +546,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GITHUB_PAT: ${{ secrets.CLAUDE_REVIEW_PAT }}
+          APP_BOT_NAME: ${{ inputs.app-bot-name }}
           CLAUDE_COMMENT_ID: ${{ env.CLAUDE_COMMENT_ID }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -538,9 +555,12 @@ jobs:
           bot_name: ${{ inputs.app-bot-name }}
           allowed_bots: ${{ inputs.claude-review-allowed-bots }}
           show_full_output: true
-          use_sticky_comment: true
+          settings: .github/claude-review-settings.json
+          additional_permissions: |
+            actions: read
           claude_args: |
-            --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github__get_job_logs,mcp__github__submit_pending_pull_request_review,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/minimize-review-comment.sh:*),Bash(bash .github/scripts/minimize-all-reviews.sh:*),Bash(bash .github/scripts/resolve-thread.sh:*),Read,Glob,Grep,Write(/tmp/**)"
+            --model claude-opus-4-7
+            --max-turns 30
           prompt: |
             # Pull Request Context
 
@@ -574,16 +594,26 @@ jobs:
             - MCP tools use the GitHub App token which has full permissions
             - **Exception:** For check runs, use `gh api` (see section 1.3) - the MCP `get_status` method queries the legacy status API which is empty
 
-            **Helper Scripts** (.github/scripts/):
-            - Ready-to-use scripts for complex review management operations
-            - Call via bash interpreter (scripts are not executable):
-              - `bash .github/scripts/resolve-thread.sh <comment_id> <pr_number> <commit_sha> [repo_owner] [repo_name]` - Reply to thread and mark as resolved (COMMONLY USED)
-              - `bash .github/scripts/minimize-review-comment.sh <comment_id> <commit_sha> [repo_owner] [repo_name]` - Minimize a specific old review comment as outdated (RARELY NEEDED - sticky comments auto-update)
-              - `bash .github/scripts/minimize-all-reviews.sh <pr_number> <current_sha> [bot_login] [repo_owner] [repo_name]` - Minimize all old review summaries (RARELY NEEDED - sticky comments auto-update)
-            - Use when MCP tools + simple bash can't accomplish the task
-            - Repo owner/name default to ${{ github.repository_owner }}/${{ github.event.repository.name }} if not specified
-            - **Note:** With sticky comments enabled, you rarely need to minimize anything
-            - **Tokens:** Helper scripts automatically use `GITHUB_PAT` for operations requiring special permissions (resolving/minimizing threads)
+            **Helper Script** (`.github/scripts/gh-pr-review.sh`):
+            All review-management operations go through one CLI. Call via bash:
+
+              - `bash .github/scripts/gh-pr-review.sh resolve-thread <comment_id> <pr_number> <commit_sha>`
+                Reply to a review-comment thread and mark it resolved. **COMMONLY USED.**
+
+              - `bash .github/scripts/gh-pr-review.sh approve-pr <pr_number> <commit_sha> [body]`
+                Submit a formal APPROVE review. Use only when all previously reported
+                issues are resolved AND no new issues exist.
+
+              - `bash .github/scripts/gh-pr-review.sh minimize-comment <comment_id>`
+                Minimize a specific issue-comment as OUTDATED. **RARELY NEEDED.**
+
+              - `bash .github/scripts/gh-pr-review.sh minimize-old-summaries <pr_number> <current_sha>`
+                Minimize old bot review summaries. Excludes the sticky comment and any
+                comment mentioning the current SHA. **RARELY NEEDED.**
+
+            Use these when MCP tools + simple bash can't accomplish the task. Repo
+            owner/name come from `GITHUB_REPOSITORY`, bot login from `APP_BOT_NAME`,
+            and the sticky comment id from `CLAUDE_COMMENT_ID` automatically.
 
             ---
 
@@ -696,7 +726,7 @@ jobs:
 
             **DO NOT create multiple new reviews.** Instead:
 
-            1. **Update your existing sticky comment** (if one exists) using `mcp__github_comment__update_claude_comment`
+            1. **Update the sticky comment** (ID `$CLAUDE_COMMENT_ID`) using `mcp__github_comment__update_claude_comment`
             2. In the updated comment:
                - State: "🔄 Branch was force-pushed (previous review at commit [old-sha], now at ${{ github.event.pull_request.head.sha }})"
                - Note: "Previous inline comments are orphaned and can be ignored"
@@ -715,7 +745,7 @@ jobs:
             **If fixed:** Reply to the existing review comment thread and mark as resolved:
 
             ```bash
-            bash .github/scripts/resolve-thread.sh <comment_id> ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            bash .github/scripts/gh-pr-review.sh resolve-thread <comment_id> ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
             ```
 
             Replace `<comment_id>` with the actual numeric comment ID from the review comment.
@@ -744,19 +774,41 @@ jobs:
               ```
             - Submit review when done: `mcp__github__pull_request_review_write(method: "submit_pending")`
 
+            ### Approving the PR
+
+            When ALL of the following are true:
+            - Every previously reported issue has been resolved (you've already
+              called `resolve-thread` on each)
+            - You found NO new issues in this pass
+            - All required validation checks (section 1.3) are passing or neutral
+
+            …submit a formal approval:
+
+            ```bash
+            bash .github/scripts/gh-pr-review.sh approve-pr ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }} "All issues addressed; approving."
+            ```
+
+            Then update the sticky comment to reflect the approval state.
+
+            **Do NOT approve** while inline comment threads are still unresolved
+            or while new issues exist. If issues remain, reply to threads (or
+            post new inline comments) and update the sticky — but do not call
+            `approve-pr`.
+
             ### Manage Summary Comments:
 
-            **IMPORTANT - Sticky Comment Feature:**
-            - This workflow uses sticky comments - your main review comment is automatically updated in place
-            - The sticky comment ID is available in the environment variable `CLAUDE_COMMENT_ID` (0 if this is the first review)
-            - **CRITICAL:** Include `<!-- claude-code-review -->` at the start of your main review comment (after the heading) so it can be identified and updated
-            - **DO NOT minimize the sticky comment** - it will be updated automatically
-            - Only minimize OTHER old review comments (e.g., from before sticky comments were enabled)
+            **IMPORTANT - Sticky Comment (Pre-Created):**
+            - The sticky review comment has already been created for you. Its ID is in the environment variable `CLAUDE_COMMENT_ID` (always a real ID, never 0).
+            - **Always update this comment** via `mcp__github_comment__update_claude_comment`. Never create a new top-level review comment.
+            - **Always include the sticky marker** as the first line of the comment body, exactly:
+              `<!-- claude-review-sticky:pr-${{ github.event.pull_request.number }} -->`
+            - **DO NOT minimize the sticky comment** — it is the persistent review surface.
 
             **Main review comment format:**
             ```markdown
+            <!-- claude-review-sticky:pr-${{ github.event.pull_request.number }} -->
+
             # Code Review
-            <!-- claude-code-review -->
 
             **Current Commit:** abc1234
 
@@ -764,15 +816,15 @@ jobs:
             ...your review content...
             ```
 
-            **If you need to minimize old non-sticky comments (RARE):**
+            **If you need to minimize old non-sticky comments (RARE — only legacy comments from before this workflow):**
 
             ```bash
-            bash .github/scripts/minimize-all-reviews.sh ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            bash .github/scripts/gh-pr-review.sh minimize-old-summaries ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
             ```
 
             This automatically excludes the sticky comment (ID: ${{ env.CLAUDE_COMMENT_ID }}) and minimizes only old review comments.
 
-            **In most cases, you should NOT need to minimize anything** - just update the sticky comment.
+            **In most cases you should NOT minimize anything** — just update the sticky comment.
 
             **Only post new summary when:**
             - Significant new changes warrant fresh analysis
