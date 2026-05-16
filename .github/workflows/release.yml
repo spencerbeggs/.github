@@ -3,6 +3,11 @@ name: Release Dispatcher
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
       dry-run:
         description: Run in dry-run mode (preview only)
         type: boolean
@@ -46,7 +51,7 @@ on:
 jobs:
   control:
     name: Detect Phase
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
       pull-requests: read
@@ -78,6 +83,7 @@ jobs:
     if: needs.control.outputs.phase == 'branch-management'
     uses: spencerbeggs/.github/.github/workflows/release-branch.yml@main
     with:
+      runner: ${{ inputs.runner }}
       dry-run: ${{ inputs.dry-run }}
     secrets: inherit
 
@@ -89,6 +95,7 @@ jobs:
       needs.control.outputs.is_pr_merged != 'true'
     uses: spencerbeggs/.github/.github/workflows/release-validate.yml@main
     with:
+      runner: ${{ inputs.runner }}
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
       app-bot-name: ${{ inputs.app-bot-name }}
@@ -104,6 +111,7 @@ jobs:
     if: needs.control.outputs.phase == 'publishing' || needs.control.outputs.phase == 'close-issues'
     uses: spencerbeggs/.github/.github/workflows/release-publish.yml@main
     with:
+      runner: ${{ inputs.runner }}
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}

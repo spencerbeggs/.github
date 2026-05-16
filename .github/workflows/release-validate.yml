@@ -3,6 +3,11 @@ name: PR Validation
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
       phase:
         description: The detected workflow phase
         type: string
@@ -24,7 +29,8 @@ on:
         type: boolean
         default: false
       claude-review-allowed-bots:
-        description: Comma-separated list of bot names allowed to trigger review, or "*"
+        description:
+          Comma-separated list of bot names allowed to trigger review, or "*"
           for all
         type: string
         default: "*"
@@ -52,7 +58,7 @@ env:
 jobs:
   pre-publish:
     name: Pre-Publish Validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     if: inputs.phase == 'validation'
     env:
       DO_NOT_TRACK: "1"
@@ -82,7 +88,7 @@ jobs:
 
   validate:
     name: Code Validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     env:
       DO_NOT_TRACK: "1"
       TURBO_TELEMETRY_DISABLE: "1"
@@ -331,8 +337,8 @@ jobs:
 
   claude-review:
     name: Claude Code Review
-    needs: [ validate ]
-    runs-on: ubuntu-latest
+    needs: [validate]
+    runs-on: ${{ inputs.runner }}
     # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
     if: |
       github.event.pull_request.user.login == inputs.app-bot-name ||
@@ -372,7 +378,8 @@ jobs:
           fi
 
       - name: Checkout repository
-        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
+        if:
+          steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
           != true
         uses: actions/checkout@v6
         with:
@@ -381,7 +388,8 @@ jobs:
           persist-credentials: true
 
       - name: Check if PR only contains version/changelog changes
-        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
+        if:
+          steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
           != true
         id: check-changes
         run: |
@@ -1041,7 +1049,7 @@ jobs:
 
   cleanup:
     name: Cleanup
-    needs: [ validate, claude-review ]
+    needs: [validate, claude-review]
     runs-on: ubuntu-latest
     if: always()
     permissions:

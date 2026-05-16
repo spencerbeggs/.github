@@ -3,6 +3,11 @@ name: Release Publishing
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
       phase:
         description: The release phase (publishing or close-issues)
         type: string
@@ -39,7 +44,7 @@ on:
 jobs:
   publish:
     name: Publish Packages
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     env:
       DO_NOT_TRACK: "1"
       TURBO_TELEMETRY_DISABLE: "1"

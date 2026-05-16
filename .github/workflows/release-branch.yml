@@ -3,6 +3,11 @@ name: Release Branch Management
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
       dry-run:
         description: Run in dry-run mode
         type: boolean
@@ -21,7 +26,7 @@ on:
 jobs:
   manage-branch:
     name: Manage Release Branch
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     env:
       DO_NOT_TRACK: "1"
       TURBO_TELEMETRY_DISABLE: "1"
