@@ -47,7 +47,7 @@ jobs:
         uses: savvy-web/workflow-runtime-action@main
 
       - name: Run release
-        uses: savvy-web/workflow-release-action@main
+        uses: savvy-web/silk-release-action@main
         with:
           phase: branch-management
           app-id: ${{ secrets.APP_ID }}

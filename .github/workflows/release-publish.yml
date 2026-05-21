@@ -68,7 +68,7 @@ jobs:
 
       - name: Run release
         id: release
-        uses: savvy-web/workflow-release-action@main
+        uses: savvy-web/silk-release-action@main
         with:
           phase: ${{ inputs.phase }}
           app-id: ${{ secrets.APP_ID }}
