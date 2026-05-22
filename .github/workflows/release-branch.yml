@@ -3,15 +3,15 @@ name: Release Branch Management
 on:
   workflow_call:
     inputs:
+      dry-run:
+        description: Run in dry-run mode
+        type: boolean
+        default: false
       runner:
         description: Runner type (e.g., ubuntu-latest)
         type: string
         required: false
         default: ubuntu-latest
-      dry-run:
-        description: Run in dry-run mode
-        type: boolean
-        default: false
     secrets:
       APP_ID:
         required: true
@@ -27,10 +27,6 @@ jobs:
   manage-branch:
     name: Manage Release Branch
     runs-on: ${{ inputs.runner }}
-    env:
-      DO_NOT_TRACK: "1"
-      TURBO_TELEMETRY_DISABLE: "1"
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     permissions:
       contents: write
       pull-requests: write
@@ -41,7 +37,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
-
       - name: Setup runtime
         id: runtime
         uses: savvy-web/workflow-runtime-action@main
@@ -50,8 +45,9 @@ jobs:
         uses: savvy-web/silk-release-action@main
         with:
           phase: branch-management
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-client-id: ${{ vars.APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry-run }}
+          release-branch: changeset-release/main
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}

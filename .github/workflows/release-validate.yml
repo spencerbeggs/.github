@@ -29,9 +29,7 @@ on:
         type: boolean
         default: false
       claude-review-allowed-bots:
-        description:
-          Comma-separated list of bot names allowed to trigger review, or "*"
-          for all
+        description: Comma-separated list of bot names allowed to trigger review, or "*" for all
         type: string
         default: "*"
       sbom-config:
@@ -53,17 +51,12 @@ on:
           Custom registry authentication (one per line).
           Format: https://registry.example.com/_authToken=TOKEN
         required: false
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   pre-publish:
     name: Pre-Publish Validation
     runs-on: ${{ inputs.runner }}
     if: inputs.phase == 'validation'
-    env:
-      DO_NOT_TRACK: "1"
-      TURBO_TELEMETRY_DISABLE: "1"
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     permissions:
       contents: read
       pull-requests: read
@@ -79,20 +72,20 @@ jobs:
         uses: savvy-web/silk-release-action@main
         with:
           phase: validation
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-client-id: ${{ vars.APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry-run }}
+          release-branch: changeset-release/main
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
           sbom-config: ${{ inputs.sbom-config }}
 
   validate:
     name: Code Validation
-    runs-on: ${{ inputs.runner }}
+    runs-on: ubuntu-latest
     env:
       DO_NOT_TRACK: "1"
       TURBO_TELEMETRY_DISABLE: "1"
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     permissions:
       contents: read
       checks: write
@@ -102,7 +95,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.APP_CLIENT_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-contents: read
           permission-checks: write
@@ -115,7 +108,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          submodules: true
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
 
@@ -338,16 +330,13 @@ jobs:
   claude-review:
     name: Claude Code Review
     needs: [validate]
-    runs-on: ${{ inputs.runner }}
+    runs-on: ubuntu-latest
     # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
     if: |
       github.event.pull_request.user.login == inputs.app-bot-name ||
       github.event.pull_request.user.login == 'copilot[bot]' ||
       github.event.pull_request.user.type == 'User'
     env:
-      DO_NOT_TRACK: "1"
-      TURBO_TELEMETRY_DISABLE: "1"
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       CHECK_RUN_ID: ""
       CLAUDE_COMMENT_ID: "0"
     permissions:
@@ -359,7 +348,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.APP_CLIENT_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
@@ -378,9 +367,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        if:
-          steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
-          != true
+        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -388,9 +375,7 @@ jobs:
           persist-credentials: true
 
       - name: Check if PR only contains version/changelog changes
-        if:
-          steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review
-          != true
+        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
         id: check-changes
         run: |
           git fetch origin ${{ github.base_ref }}
@@ -507,60 +492,32 @@ jobs:
               }
             });
 
-      - name: Find or create sticky review comment
+      - name: Find existing Claude review comment
         if: steps.create-check.outputs.should-skip != 'true'
-        id: sticky-comment
+        id: find-comment
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const prNumber = context.payload.pull_request.number;
-            const marker = `<!-- claude-review-sticky:pr-${prNumber} -->`;
-            const botName = '${{ inputs.app-bot-name }}';
-
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: prNumber,
-              per_page: 100
+              issue_number: context.payload.pull_request.number
             });
 
-            // Match by marker (preferred) but fall back to author + heading
-            // pattern, because Claude has been observed wiping the marker on
-            // update. The fallback prevents duplicate stickies in that case.
-            const isStickyComment = (c) => {
-              if (c.user.login !== botName) return false;
-              if (c.body.includes(marker)) return true;
-              if (c.body.includes('<!-- claude-review-sticky:')) return true;
-              if (c.body.includes('<!-- claude-code-review -->')) return true;
-              if (/(^|\n)\s*#\s+Code Review\b/.test(c.body)) return true;
-              return false;
-            };
+            const botName = '${{ inputs.app-bot-name }}';
+            const claudeComment = comments.find(comment =>
+              comment.user.login === botName &&
+              (comment.body.includes('# Code Review') || comment.body.includes('<!-- claude-code-review -->'))
+            );
 
-            const matches = comments
-              .filter(isStickyComment)
-              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-
-            let stickyId;
-            if (matches.length > 0) {
-              stickyId = matches[0].id;
-              console.log(`Found existing sticky comment: ${stickyId}`);
-              if (matches.length > 1) {
-                console.log(`Found ${matches.length - 1} duplicate sticky comment(s) — leaving for cleanup`);
-              }
+            if (claudeComment) {
+              console.log(`Found existing Claude review comment: ${claudeComment.id}`);
+              core.exportVariable('CLAUDE_COMMENT_ID', claudeComment.id);
             } else {
-              const { data: created } = await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body: `${marker}\n\n# Code Review\n\n_Review in progress…_`
-              });
-              stickyId = created.id;
-              console.log(`Created sticky comment placeholder: ${stickyId}`);
+              console.log('No existing Claude review comment found');
+              core.exportVariable('CLAUDE_COMMENT_ID', '0');
             }
-
-            core.exportVariable('CLAUDE_COMMENT_ID', stickyId);
-            core.setOutput('comment-id', stickyId);
 
       - name: Run Claude Code Review
         if: steps.create-check.outputs.should-skip != 'true'
@@ -568,7 +525,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_BOT_NAME: ${{ inputs.app-bot-name }}
+          GITHUB_PAT: ${{ secrets.CLAUDE_REVIEW_PAT }}
           CLAUDE_COMMENT_ID: ${{ env.CLAUDE_COMMENT_ID }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -577,18 +534,9 @@ jobs:
           bot_name: ${{ inputs.app-bot-name }}
           allowed_bots: ${{ inputs.claude-review-allowed-bots }}
           show_full_output: true
-          # Tools must be passed via `--allowedTools` (not `settings.permissions.allow`)
-          # because the action's MCP-server registration logic only spins up the
-          # github / github_comment / github_inline_comment MCP servers when their
-          # tool prefixes appear in --allowedTools. See claude-code-action
-          # src/mcp/install-mcp-server.ts and src/modes/agent/parse-tools.ts.
-          plugin_marketplaces: |
-            https://github.com/spencerbeggs/bot.git
-            https://github.com/savvy-web/systems.git
+          use_sticky_comment: true
           claude_args: |
-            --model claude-opus-4-7
-            --max-turns 80
-            --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github__submit_pending_pull_request_review,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/gh-pr-review.sh:*),Read,Glob,Grep,Write(/tmp/**)"
+            --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github__get_job_logs,mcp__github__submit_pending_pull_request_review,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/minimize-review-comment.sh:*),Bash(bash .github/scripts/minimize-all-reviews.sh:*),Bash(bash .github/scripts/resolve-thread.sh:*),Read,Glob,Grep,Write(/tmp/**)"
           prompt: |
             # Pull Request Context
 
@@ -622,41 +570,16 @@ jobs:
             - MCP tools use the GitHub App token which has full permissions
             - **Exception:** For check runs, use `gh api` (see section 1.3) - the MCP `get_status` method queries the legacy status API which is empty
 
-            **Helper Script** (`.github/scripts/gh-pr-review.sh`):
-            All review-management operations go through one CLI. The path is
-            **always** `.github/scripts/gh-pr-review.sh` — there is no separate
-            `resolve-thread.sh` or `minimize-*.sh` script; those are subcommands.
-
-              - `bash .github/scripts/gh-pr-review.sh check-status <commit_sha>`
-                Print filtered validation check-run status. Use this in Step 1.3
-                instead of piping `gh api` to `jq` (the action's bash policy
-                rejects raw pipes).
-
-              - `bash .github/scripts/gh-pr-review.sh resolve-thread <comment_id> <pr_number> <commit_sha>`
-                Reply to a review-comment thread and mark it resolved. **COMMONLY USED.**
-
-              - `bash .github/scripts/gh-pr-review.sh approve-pr <pr_number> <commit_sha> [body]`
-                Submit a formal APPROVE review. Use only when all previously reported
-                issues are resolved AND no new issues exist.
-
-              - `bash .github/scripts/gh-pr-review.sh minimize-comment <comment_id>`
-                Minimize a specific issue-comment as OUTDATED. **RARELY NEEDED.**
-
-              - `bash .github/scripts/gh-pr-review.sh minimize-old-summaries <pr_number> <current_sha>`
-                Minimize old bot review summaries. Excludes the sticky comment and any
-                comment mentioning the current SHA. **RARELY NEEDED.**
-
-            Use these when MCP tools + simple bash can't accomplish the task. Repo
-            owner/name come from `GITHUB_REPOSITORY`, bot login from `APP_BOT_NAME`,
-            and the sticky comment id from `CLAUDE_COMMENT_ID` automatically.
-
-            **Bash policy reminder:** The action splits compound commands and
-            requires each operand to be independently allowed. Pipes (`|`),
-            chains (`&&`, `;`), and command substitution all trigger rejection
-            even when the binaries themselves are allowlisted. When you need to
-            transform `gh api` output, prefer a `gh-pr-review.sh` subcommand. If
-            no subcommand fits, write the JSON to `/tmp/<file>.json` first and
-            run `jq` on the file as a separate command.
+            **Helper Scripts** (.github/scripts/):
+            - Ready-to-use scripts for complex review management operations
+            - Call via bash interpreter (scripts are not executable):
+              - `bash .github/scripts/resolve-thread.sh <comment_id> <pr_number> <commit_sha> [repo_owner] [repo_name]` - Reply to thread and mark as resolved (COMMONLY USED)
+              - `bash .github/scripts/minimize-review-comment.sh <comment_id> <commit_sha> [repo_owner] [repo_name]` - Minimize a specific old review comment as outdated (RARELY NEEDED - sticky comments auto-update)
+              - `bash .github/scripts/minimize-all-reviews.sh <pr_number> <current_sha> [bot_login] [repo_owner] [repo_name]` - Minimize all old review summaries (RARELY NEEDED - sticky comments auto-update)
+            - Use when MCP tools + simple bash can't accomplish the task
+            - Repo owner/name default to ${{ github.repository_owner }}/${{ github.event.repository.name }} if not specified
+            - **Note:** With sticky comments enabled, you rarely need to minimize anything
+            - **Tokens:** Helper scripts automatically use `GITHUB_PAT` for operations requiring special permissions (resolving/minimizing threads)
 
             ---
 
@@ -688,17 +611,15 @@ jobs:
             - For file diffs: Use `mcp__github__get_pull_request_diff` or `git diff` commands instead
 
             ## 1.3 Check Validation Results
-            All validation checks have already run before this review. Run:
+            All validation checks have already run before this review. Check their status by filtering to only the checks we care about:
 
             ```bash
-            bash .github/scripts/gh-pr-review.sh check-status ${{ github.event.pull_request.head.sha }}
+            gh api repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs | \
+              jq --argjson names '["PR Title Validation","Conventional Commits","Code Quality","Markdown","Tests"]' \
+              '.check_runs[] | select([.name] | inside($names)) | {name, status, conclusion, details_url}'
             ```
 
-            This wraps `gh api ... | jq ...` in a single allowlisted command (the
-            action's bash policy rejects raw `|` and `&&` pipes — always prefer a
-            wrapper subcommand or `> /tmp/file.json` + a separate read).
-
-            The output is filtered to only the validation checks that matter:
+            This filters to only the validation checks we care about:
               - **PR Title Validation** - Ensures PR title follows conventional commits
               - **Conventional Commits** - Validates all commit messages
               - **Code Quality** - Biome linting and formatting
@@ -771,7 +692,7 @@ jobs:
 
             **DO NOT create multiple new reviews.** Instead:
 
-            1. **Update the sticky comment** (ID `$CLAUDE_COMMENT_ID`) using `mcp__github_comment__update_claude_comment`
+            1. **Update your existing sticky comment** (if one exists) using `mcp__github_comment__update_claude_comment`
             2. In the updated comment:
                - State: "🔄 Branch was force-pushed (previous review at commit [old-sha], now at ${{ github.event.pull_request.head.sha }})"
                - Note: "Previous inline comments are orphaned and can be ignored"
@@ -781,38 +702,27 @@ jobs:
 
             ## If No Force-Push (Normal Update):
 
-            ### For Previously Reported Issues (yours AND other reviewers'):
+            ### For Previously Reported Issues:
 
-            Fetch ALL inline review threads on the PR via
-            `mcp__github__get_pull_request_review_comments`. For each one,
-            regardless of author (you, GitHub Copilot `copilot[bot]`, human
-            reviewers, etc.), check whether the issue has been addressed:
+            Check if your inline comments are still relevant by:
+            1. Reading the file at the line mentioned in your comment
+            2. Checking if the issue still exists
 
-            1. Read the file at the line the thread points to.
-            2. Check if the described issue still exists in current code.
-            3. Skip threads that are already resolved (`isResolved: true`).
-
-            **If fixed:** Reply to the thread and mark it resolved. Pass the
-            *numeric comment ID* — not a literal `<comment_id>` placeholder.
-            For example, if the thread's comment id is `3166557097`:
+            **If fixed:** Reply to the existing review comment thread and mark as resolved:
 
             ```bash
-            bash .github/scripts/gh-pr-review.sh resolve-thread 3166557097 ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            bash .github/scripts/resolve-thread.sh <comment_id> ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
             ```
 
-            **If still broken:** Reply to the existing thread (do not resolve).
-            Again, substitute the numeric ID, e.g. `3166557097`:
+            Replace `<comment_id>` with the actual numeric comment ID from the review comment.
 
+            **If still broken:** Reply to the existing thread (do not mark as resolved):
             ```bash
-            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/3166557097/replies \
+            gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/<comment_id>/replies \
               -f body="⚠️ This issue persists at commit ${{ github.event.pull_request.head.sha }}."
             ```
 
-            Resolving threads from other reviewers (especially Copilot) is
-            important — leaving stale concerns open clutters the PR even when
-            the underlying code has been fixed. Don't resolve human reviewers'
-            threads silently if you're unsure; reply with what you observed
-            and let them confirm.
+            Replace `<comment_id>` with the actual numeric comment ID.
 
             ### For New Issues:
             - Create pending review first: `mcp__github__pull_request_review_write(method: "create", event: omitted for pending)`
@@ -830,46 +740,19 @@ jobs:
               ```
             - Submit review when done: `mcp__github__pull_request_review_write(method: "submit_pending")`
 
-            ### Approving the PR
-
-            When ALL of the following are true:
-            - Every previously reported issue (yours AND other reviewers') is
-              either fixed-and-resolved or no longer relevant
-            - You found NO new issues in this pass
-            - All required validation checks (section 1.3) are passing or neutral
-
-            …submit a formal approval:
-
-            ```bash
-            bash .github/scripts/gh-pr-review.sh approve-pr ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }} "All issues addressed; approving."
-            ```
-
-            Then update the sticky comment to reflect the approval state.
-
-            **Do NOT approve** while inline comment threads are still unresolved
-            or while new issues exist. If issues remain, reply to threads (or
-            post new inline comments) and update the sticky — but do not call
-            `approve-pr`.
-
             ### Manage Summary Comments:
 
-            **IMPORTANT - Sticky Comment (Pre-Created):**
-            - The sticky review comment has already been created for you. Its ID is in the environment variable `CLAUDE_COMMENT_ID` (always a real ID, never 0).
-            - **Always update this comment** via `mcp__github_comment__update_claude_comment`. Never create a new top-level review comment.
-            - **CRITICAL — the first line of EVERY update must be exactly:**
-              `<!-- claude-review-sticky:pr-${{ github.event.pull_request.number }} -->`
-              The MCP tool replaces the entire body. If you forget the marker,
-              the next workflow run cannot find this comment and will create
-              a duplicate sticky. Include it on every update without exception,
-              even if the prior body had it. Make this line the very first line
-              of the body — no leading blank lines, no other content above it.
-            - **DO NOT minimize the sticky comment** — it is the persistent review surface.
+            **IMPORTANT - Sticky Comment Feature:**
+            - This workflow uses sticky comments - your main review comment is automatically updated in place
+            - The sticky comment ID is available in the environment variable `CLAUDE_COMMENT_ID` (0 if this is the first review)
+            - **CRITICAL:** Include `<!-- claude-code-review -->` at the start of your main review comment (after the heading) so it can be identified and updated
+            - **DO NOT minimize the sticky comment** - it will be updated automatically
+            - Only minimize OTHER old review comments (e.g., from before sticky comments were enabled)
 
             **Main review comment format:**
             ```markdown
-            <!-- claude-review-sticky:pr-${{ github.event.pull_request.number }} -->
-
             # Code Review
+            <!-- claude-code-review -->
 
             **Current Commit:** abc1234
 
@@ -877,15 +760,15 @@ jobs:
             ...your review content...
             ```
 
-            **If you need to minimize old non-sticky comments (RARE — only legacy comments from before this workflow):**
+            **If you need to minimize old non-sticky comments (RARE):**
 
             ```bash
-            bash .github/scripts/gh-pr-review.sh minimize-old-summaries ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            bash .github/scripts/minimize-all-reviews.sh ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
             ```
 
             This automatically excludes the sticky comment (ID: ${{ env.CLAUDE_COMMENT_ID }}) and minimizes only old review comments.
 
-            **In most cases you should NOT minimize anything** — just update the sticky comment.
+            **In most cases, you should NOT need to minimize anything** - just update the sticky comment.
 
             **Only post new summary when:**
             - Significant new changes warrant fresh analysis
@@ -896,25 +779,6 @@ jobs:
             ---
 
             # Step 3: What to Review
-
-            ## Files to Skip in Review
-
-            The following paths are **context, not code under review.** Read them
-            selectively when you need background on intent, architecture, or
-            terminology — but do **not** flag changes to them as review issues
-            and do **not** post inline comments on them. They change frequently
-            as a normal byproduct of work.
-
-            - `.claude/design/**` — internal design docs and architecture notes
-            - `.claude/plans/**` — implementation plans
-            - `.claude/agents/**`, `.claude/skills/**`, `.claude/commands/**` — AI tooling config
-            - `CLAUDE.md`, `**/CLAUDE.md`, `CLAUDE.local.md` — LLM context files
-            - `CHANGELOG.md`, `**/CHANGELOG.md` — auto-generated by changesets
-            - `.changeset/*.md` — release notes (validated separately)
-
-            If a PR's *only* substantive changes are in these paths, note that
-            and approve. If a PR mixes them with real code changes, review the
-            real code and ignore the doc churn.
 
             ## Code Quality
             - Follow existing patterns in the codebase
@@ -1059,7 +923,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.APP_CLIENT_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-checks: write
 

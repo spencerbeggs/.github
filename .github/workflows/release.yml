@@ -47,14 +47,18 @@ on:
           NPM access token for publishing to npmjs.org.
           Required for first-time publishes or when OIDC isn't configured.
         required: false
-
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  packages: write
+  attestations: write
+  checks: write
+  artifact-metadata: write
 jobs:
   control:
     name: Detect Phase
     runs-on: ${{ inputs.runner }}
-    permissions:
-      contents: read
-      pull-requests: read
     outputs:
       phase: ${{ steps.control.outputs.phase }}
       should_continue: ${{ steps.control.outputs.should_continue }}
@@ -70,7 +74,6 @@ jobs:
       - name: Detect workflow phase
         id: control
         uses: savvy-web/workflow-control-action@main
-
       - name: Set context flags
         id: context
         run: |
@@ -83,8 +86,8 @@ jobs:
     if: needs.control.outputs.phase == 'branch-management'
     uses: spencerbeggs/.github/.github/workflows/release-branch.yml@main
     with:
-      runner: ${{ inputs.runner }}
       dry-run: ${{ inputs.dry-run }}
+      runner: ${{ inputs.runner }}
     secrets: inherit
 
   validation:
@@ -95,7 +98,6 @@ jobs:
       needs.control.outputs.is_pr_merged != 'true'
     uses: spencerbeggs/.github/.github/workflows/release-validate.yml@main
     with:
-      runner: ${{ inputs.runner }}
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
       app-bot-name: ${{ inputs.app-bot-name }}
@@ -103,6 +105,7 @@ jobs:
       skip-claude-review: ${{ inputs.skip-claude-review }}
       claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+      runner: ${{ inputs.runner }}
     secrets: inherit
 
   publish:
@@ -111,8 +114,8 @@ jobs:
     if: needs.control.outputs.phase == 'publishing' || needs.control.outputs.phase == 'close-issues'
     uses: spencerbeggs/.github/.github/workflows/release-publish.yml@main
     with:
-      runner: ${{ inputs.runner }}
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+      runner: ${{ inputs.runner }}
     secrets: inherit
