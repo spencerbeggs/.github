@@ -378,6 +378,15 @@ jobs:
         if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
         id: check-changes
         run: |
+          HEAD_REF="${{ github.head_ref }}"
+          case "$HEAD_REF" in
+            pnpm/config-deps | copilot/* | dependabot/* | changeset-release/*)
+              echo "skip-review=true" >> $GITHUB_OUTPUT
+              echo "Skipping Claude review - branch '$HEAD_REF' is an automated update (covered by preflight reviews)"
+              exit 0
+              ;;
+          esac
+
           git fetch origin ${{ github.base_ref }}
           CHANGED_FILES_WITH_STATUS=$(git diff --name-status origin/${{ github.base_ref }}...HEAD)
           CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
