@@ -74,7 +74,7 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/workflow-runtime-action@main
+        uses: savvy-web/silk-runtime-action@v1
 
       - name: Pre-publish validation
         uses: savvy-web/silk-release-action@v1
@@ -145,7 +145,7 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/workflow-runtime-action@main
+        uses: savvy-web/silk-runtime-action@v1
 
       - name: Detect package manager
         id: pm
