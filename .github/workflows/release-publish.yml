@@ -64,7 +64,7 @@ jobs:
 
       - name: Run release
         id: release
-        uses: savvy-web/silk-release-action@v1
+        uses: savvy-web/silk-release-action@v2
         with:
           phase: ${{ inputs.phase }}
           app-client-id: ${{ vars.APP_CLIENT_ID }}
