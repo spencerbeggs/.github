@@ -90,7 +90,7 @@ jobs:
 
   validate:
     name: Code Validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     env:
       DO_NOT_TRACK: "1"
       TURBO_TELEMETRY_DISABLE: "1"
@@ -1036,7 +1036,7 @@ jobs:
   cleanup:
     name: Cleanup
     needs: [validate, claude-review]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     if: always()
     permissions:
       checks: write
