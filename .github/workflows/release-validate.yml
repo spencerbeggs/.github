@@ -70,7 +70,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup runtime
         id: runtime
@@ -112,7 +112,7 @@ jobs:
         run: sleep 5
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -376,7 +376,7 @@ jobs:
 
       - name: Checkout repository
         if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
