@@ -27,6 +27,10 @@ jobs:
   manage-branch:
     name: Manage Release Branch
     runs-on: ${{ inputs.runner }}
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: write
       pull-requests: write

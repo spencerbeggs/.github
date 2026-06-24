@@ -65,6 +65,10 @@ jobs:
     name: Pre-Publish Validation
     runs-on: ${{ inputs.runner }}
     if: inputs.phase == 'validation'
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: read
       pull-requests: read
@@ -92,8 +96,9 @@ jobs:
     name: Code Validation
     runs-on: ${{ inputs.runner }}
     env:
+      TURBO_TELEMETRY_DISABLED: "1"
       DO_NOT_TRACK: "1"
-      TURBO_TELEMETRY_DISABLE: "1"
+      TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: read
       checks: write
@@ -338,7 +343,7 @@ jobs:
   claude-review:
     name: Claude Code Review
     needs: [validate]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
     if: |
       github.event.pull_request.user.login == inputs.app-bot-name ||
@@ -558,6 +563,7 @@ jobs:
           use_sticky_comment: true
           claude_args: |
             --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github__get_job_logs,mcp__github__submit_pending_pull_request_review,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/gh-pr-review.sh:*),Read,Glob,Grep,Write(/tmp/**),Skill"
+            --model "claude-opus-4-8"
           prompt: |
             # Pull Request Context
 

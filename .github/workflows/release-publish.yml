@@ -45,6 +45,10 @@ jobs:
   publish:
     name: Publish Packages
     runs-on: ${{ inputs.runner }}
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: write
       id-token: write
@@ -72,6 +76,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry-run }}
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
-          release-branch: changesets-release/dev
+          release-branch: changeset-release/main
           npm-token: ${{ secrets.NPM_TOKEN }}
           sbom-config: ${{ inputs.sbom-config }}
