@@ -81,7 +81,7 @@ jobs:
         uses: savvy-web/silk-runtime-action@v1
 
       - name: Pre-publish validation
-        uses: savvy-web/silk-release-action@v2
+        uses: savvy-web/silk-release-action@v3
         with:
           phase: validation
           app-client-id: ${{ vars.APP_CLIENT_ID }}

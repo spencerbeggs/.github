@@ -44,9 +44,12 @@ jobs:
       - name: Setup runtime
         id: runtime
         uses: savvy-web/silk-runtime-action@v1
+        with:
+          install-deps: "false"
+          turbo-cache: off
 
       - name: Run release
-        uses: savvy-web/silk-release-action@v2
+        uses: savvy-web/silk-release-action@v3
         with:
           phase: branch-management
           app-client-id: ${{ vars.APP_CLIENT_ID }}
