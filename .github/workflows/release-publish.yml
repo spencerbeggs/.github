@@ -85,3 +85,28 @@ jobs:
           release-branch: changeset-release/main
           npm-token: ${{ secrets.NPM_TOKEN }}
           sbom-config: ${{ inputs.sbom-config }}
+
+      - name: Generate GitHub App token
+        id: app-token
+        if: steps.release.outputs.released_packages != '' && steps.release.outputs.released_packages != '[]' && !inputs.dry-run
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: spencerbeggs
+
+      - name: Notify package release router
+        if: steps.release.outputs.released_packages != '' && steps.release.outputs.released_packages != '[]' && !inputs.dry-run
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASED_PACKAGES: ${{ steps.release.outputs.released_packages }}
+        run: |
+          # Extract package names from released_packages JSON
+          packages=$(echo "$RELEASED_PACKAGES" | jq -r '.[].name' | tr '\n' ',' | sed 's/,$//')
+
+          echo "Notifying router of released packages: $packages"
+
+          gh api repos/spencerbeggs/.github-private/dispatches \
+            -f event_type=packages-released \
+            -f "client_payload[packages]=$packages" \
+            -f "client_payload[repository]=$GITHUB_REPOSITORY"
