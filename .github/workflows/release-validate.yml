@@ -79,6 +79,12 @@ jobs:
       - name: Setup runtime
         id: runtime
         uses: savvy-web/silk-runtime-action@v1
+        with:
+          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
+          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
+          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
+          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
+          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Pre-publish validation
         uses: savvy-web/silk-release-action@v3
@@ -151,6 +157,12 @@ jobs:
       - name: Setup runtime
         id: runtime
         uses: savvy-web/silk-runtime-action@v1
+        with:
+          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
+          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
+          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
+          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
+          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Detect package manager
         id: pm
