@@ -179,6 +179,14 @@ jobs:
                 add_plugin "design-docs"
               fi
               ;;
+            spencerbeggs/rspress-plugin-api-extractor)
+              # No associated package — dispatches on any completed release of
+              # this repo (a GitHub release was actually created this run),
+              # not on a specific package name.
+              if echo "$RESULT" | jq -e '(.publishing.releases | length) > 0' >/dev/null; then
+                add_plugin "api-docs"
+              fi
+              ;;
           esac
 
           if [ "$plugins_json" = "[]" ]; then
