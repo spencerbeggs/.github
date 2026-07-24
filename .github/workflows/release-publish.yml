@@ -88,7 +88,12 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
-        if: steps.release.outputs.released_packages != '' && steps.release.outputs.released_packages != '[]' && !inputs.dry-run
+        # `released_packages` is not a real silk-release-action output (see
+        # action.yml: token/installation-id/app-slug/result/phase/status/
+        # succeeded/package-count/release-pr-number) — this condition always
+        # evaluated false, so this step and everything gated on it below never
+        # actually ran. Gate on the real phase/succeeded outputs instead.
+        if: steps.release.outputs.phase == 'publishing' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
@@ -96,13 +101,23 @@ jobs:
           owner: spencerbeggs
 
       - name: Notify package release router
-        if: steps.release.outputs.released_packages != '' && steps.release.outputs.released_packages != '[]' && !inputs.dry-run
+        if: steps.release.outputs.phase == 'publishing' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASED_PACKAGES: ${{ steps.release.outputs.released_packages }}
+          RESULT: ${{ steps.release.outputs.result }}
         run: |
-          # Extract package names from released_packages JSON
-          packages=$(echo "$RELEASED_PACKAGES" | jq -r '.[].name' | tr '\n' ',' | sed 's/,$//')
+          set -euo pipefail
+
+          # Package names actually published this run (skips packages that
+          # were only considered but skipped/failed) from the structured
+          # `result` output — see silk-release-action.output.schema.json,
+          # PublishingOutput.publishing.packages[].
+          packages=$(echo "$RESULT" | jq -r '[.publishing.packages[] | select(.status == "published") | .name] | join(",")')
+
+          if [ -z "$packages" ]; then
+            echo "No packages published this run; skipping router notification."
+            exit 0
+          fi
 
           # The commit the release tags point at; every package tagged in this
           # monorepo release shares it, so downstream consumers can pin to it.
@@ -115,3 +130,65 @@ jobs:
             -f "client_payload[packages]=$packages" \
             -f "client_payload[repository]=$GITHUB_REPOSITORY" \
             -f "client_payload[sha]=$release_sha"
+
+      - name: Notify marketplace repo
+        if: steps.release.outputs.phase == 'publishing' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RESULT: ${{ steps.release.outputs.result }}
+        run: |
+          set -euo pipefail
+
+          # Route this repo's release to the Claude Code marketplace plugin(s)
+          # (if any) it corresponds to in spencerbeggs/bot's
+          # .claude-plugin/marketplace.json, and dispatch them all as one
+          # `json` patch array (`{"plugins":[{name,sha},...]}`) rather than the
+          # single-plugin manual path — a monorepo release (e.g. effected)
+          # can publish more than one plugin package in a single run, and each
+          # match below appends its own patch to the same array. plugin-bot is
+          # manually incremented and is never dispatched here.
+          release_sha=$(git rev-parse HEAD)
+          plugins_json="[]"
+
+          add_plugin() {
+            plugins_json=$(jq -c --arg name "$1" --arg sha "$release_sha" '. + [{name: $name, sha: $sha}]' <<<"$plugins_json")
+          }
+
+          case "$GITHUB_REPOSITORY" in
+            spencerbeggs/vitest-agent)
+              # Dispatches only when @vitest-agent/plugin itself published —
+              # the marketplace plugin and the npm package share a version.
+              if echo "$RESULT" | jq -e '.publishing.packages[] | select(.name == "@vitest-agent/plugin" and .status == "published")' >/dev/null; then
+                add_plugin "vitest-agent"
+              fi
+              ;;
+            spencerbeggs/effected)
+              # Dispatches only when @effected/app itself published — the
+              # marketplace plugin and the npm package share a version. A
+              # future additional plugin package from this monorepo gets its
+              # own `if`/`add_plugin` pair here, appending to the same array.
+              if echo "$RESULT" | jq -e '.publishing.packages[] | select(.name == "@effected/app" and .status == "published")' >/dev/null; then
+                add_plugin "effected"
+              fi
+              ;;
+            spencerbeggs/design-docs-plugin)
+              # No associated package — dispatches on any completed release of
+              # this repo (a GitHub release was actually created this run),
+              # not on a specific package name.
+              if echo "$RESULT" | jq -e '(.publishing.releases | length) > 0' >/dev/null; then
+                add_plugin "design-docs"
+              fi
+              ;;
+          esac
+
+          if [ "$plugins_json" = "[]" ]; then
+            echo "No marketplace plugin mapped to this release; skipping repin dispatch."
+            exit 0
+          fi
+
+          json_payload=$(jq -c --argjson plugins "$plugins_json" -n '{plugins: $plugins}')
+          echo "Dispatching repin for: $(echo "$plugins_json" | jq -r '[.[].name] | join(", ")') at $release_sha"
+
+          gh api repos/spencerbeggs/bot/dispatches \
+            -f event_type=plugin-release \
+            -f "client_payload[json]=$json_payload"
