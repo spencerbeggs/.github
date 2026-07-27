@@ -16,14 +16,11 @@ on:
         description: Run in dry-run mode
         type: boolean
         default: false
-      app-bot-name:
-        description: GitHub App bot login name (e.g., 'my-app[bot]')
+      auto-merge:
+        description: Auto-merge strategy for pull requests (e.g., "squash", "merge", "rebase")
         type: string
         required: false
-      app-bot-id:
-        description: GitHub App bot ID for Claude Code Action
-        type: string
-        required: false
+        default: ""
       skip-claude-review:
         description: Skip Claude Code review for this run
         type: boolean
@@ -46,8 +43,6 @@ on:
         required: false
         default: ""
     secrets:
-      APP_ID:
-        required: true
       APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
@@ -87,13 +82,13 @@ jobs:
           turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Pre-publish validation
-        uses: savvy-web/silk-release-action@v3
+        uses: savvy-web/silk-release-action@v4
         with:
           phase: validation
           app-client-id: ${{ vars.APP_CLIENT_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry-run }}
+          auto-merge: ${{ inputs.auto-merge }}
           release-branch: changeset-release/main
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
           sbom-config: ${{ inputs.sbom-config }}
@@ -129,6 +124,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
+          submodules: true
 
       - name: Create validation checks
         id: create-checks
@@ -358,7 +354,7 @@ jobs:
     runs-on: ${{ inputs.runner }}
     # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
     if: |
-      github.event.pull_request.user.login == inputs.app-bot-name ||
+      github.event.pull_request.user.login == 'spencerbeggs[bot]' ||
       github.event.pull_request.user.login == 'copilot[bot]' ||
       github.event.pull_request.user.type == 'User'
     env:

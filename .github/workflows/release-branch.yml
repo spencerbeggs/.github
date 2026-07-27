@@ -12,6 +12,11 @@ on:
         type: string
         required: false
         default: ubuntu-latest
+      auto-merge:
+        description: Auto-merge strategy for pull requests (e.g., "squash", "merge", "rebase")
+        type: string
+        required: false
+        default: ""
     secrets:
       APP_ID:
         required: true
@@ -50,15 +55,15 @@ jobs:
           turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
           turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
           turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
-          install-deps: "false"
+          install-deps: false
 
       - name: Run release
-        uses: savvy-web/silk-release-action@v3
+        uses: savvy-web/silk-release-action@v4
         with:
           phase: branch-management
           app-client-id: ${{ vars.APP_CLIENT_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-merge: ${{ inputs.auto-merge }}
           dry-run: ${{ inputs.dry-run }}
           release-branch: changeset-release/main
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}

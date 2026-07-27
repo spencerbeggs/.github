@@ -12,14 +12,11 @@ on:
         description: Run in dry-run mode (preview only)
         type: boolean
         default: false
-      app-bot-name:
-        description: GitHub App bot login name (e.g., 'my-app[bot]')
+      auto-merge:
+        description: Auto-merge strategy for pull requests (e.g., "squash", "merge", "rebase")
         type: string
         required: false
-      app-bot-id:
-        description: GitHub App bot ID for Claude Code Action
-        type: string
-        required: false
+        default: ""
       skip-claude-review:
         description: Skip Claude Code review for this run
         type: boolean
@@ -84,6 +81,7 @@ jobs:
     with:
       dry-run: ${{ inputs.dry-run }}
       runner: ${{ inputs.runner }}
+      auto-merge: ${{ inputs.auto-merge }}
     secrets: inherit
 
   validation:
@@ -96,8 +94,7 @@ jobs:
     with:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
-      app-bot-name: ${{ inputs.app-bot-name }}
-      app-bot-id: ${{ inputs.app-bot-id }}
+      auto-merge: ${{ inputs.auto-merge }}
       skip-claude-review: ${{ inputs.skip-claude-review }}
       claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
