@@ -535,7 +535,7 @@ jobs:
               issue_number: context.payload.pull_request.number
             });
 
-            const botName = '${{ inputs.app-bot-name }}';
+            const botName = '${{ vars.APP_BOT_NAME }}';
             const claudeComment = comments.find(comment =>
               comment.user.login === botName &&
               (comment.body.includes('# Code Review') || comment.body.includes('<!-- claude-code-review -->'))
@@ -557,16 +557,16 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_PAT: ${{ secrets.CLAUDE_REVIEW_PAT }}
           CLAUDE_COMMENT_ID: ${{ env.CLAUDE_COMMENT_ID }}
-          APP_BOT_NAME: ${{ inputs.app-bot-name }}
+          APP_BOT_NAME: ${{ vars.APP_BOT_NAME }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}
-          bot_id: ${{ inputs.app-bot-id }}
-          bot_name: ${{ inputs.app-bot-name }}
+          bot_id: ${{ vars.APP_BOT_ID }}
+          bot_name: ${{ vars.APP_BOT_NAME }}
           allowed_bots: ${{ inputs.claude-review-allowed-bots }}
           plugin_marketplaces: ${{ inputs.claude-review-plugin-marketplaces }}
           plugins: ${{ inputs.claude-review-plugins }}
-          show_full_output: false
+          show_full_output: true
           exclude_comments_by_actor: "socket-security[bot]"
           use_sticky_comment: true
           claude_args: |
@@ -686,7 +686,7 @@ jobs:
               pullNumber: ${{ github.event.pull_request.number }}
             )
             ```
-            Filter for your comments (author.login == "${{ inputs.app-bot-name }}").
+            Filter for your comments (author.login == "${{ vars.APP_BOT_NAME }}").
             Also note any open threads authored by `copilot[bot]` - you are
             expected to resolve those too once their issues are fixed (see Step 2).
 
@@ -698,7 +698,7 @@ jobs:
               issue_number: ${{ github.event.pull_request.number }}
             )
             ```
-            Filter for your comments (user.login == "${{ inputs.app-bot-name }}")
+            Filter for your comments (user.login == "${{ vars.APP_BOT_NAME }}")
 
             ## 1.6 Detect Force-Pushes
 
@@ -961,7 +961,7 @@ jobs:
 
             Do NOT approve when:
             - Any actionable issue remains open - post your summary without approving.
-            - This PR was opened by the review bot itself (`${{ inputs.app-bot-name }}`);
+            - This PR was opened by the review bot itself (`${{ vars.APP_BOT_NAME }}`) - maintainers will handle it.;
               GitHub rejects self-approval, so just post your summary.
             - You are unsure. Withholding approval is always the safe default.
 
