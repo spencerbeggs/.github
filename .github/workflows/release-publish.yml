@@ -195,3 +195,4 @@ jobs:
 
           gh api repos/spencerbeggs/bot/dispatches \
             -f event_type=plugin-release \
+            -f "client_payload[json]=$json_payload"

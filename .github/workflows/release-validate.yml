@@ -353,10 +353,7 @@ jobs:
     needs: [validate]
     runs-on: ${{ inputs.runner }}
     # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
-    if: |
-      github.event.pull_request.user.login == 'spencerbeggs[bot]' ||
-      github.event.pull_request.user.login == 'copilot[bot]' ||
-      github.event.pull_request.user.type == 'User'
+    if: ${{ github.event.pull_request.user.login == vars.APP_BOT_NAME || github.event.pull_request.user.login == 'copilot[bot]' || github.event.pull_request.user.type == 'User' }}
     env:
       CHECK_RUN_ID: ""
       CLAUDE_COMMENT_ID: "0"
@@ -529,17 +526,24 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const { data: comments } = await github.rest.issues.listComments({
+            // Paginate: on a busy PR the sticky comment is often past the first
+            // page of 30, and a miss here makes Claude think it is the first review.
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number
+              issue_number: context.payload.pull_request.number,
+              per_page: 100
             });
 
             const botName = '${{ vars.APP_BOT_NAME }}';
-            const claudeComment = comments.find(comment =>
+            const matches = comments.filter(comment =>
               comment.user.login === botName &&
               (comment.body.includes('# Code Review') || comment.body.includes('<!-- claude-code-review -->'))
             );
+
+            // Take the most recent match. Older ones are stale pre-sticky reviews;
+            // minimizing the wrong one would hide the live comment.
+            const claudeComment = matches.at(-1);
 
             if (claudeComment) {
               console.log(`Found existing Claude review comment: ${claudeComment.id}`);
@@ -571,6 +575,7 @@ jobs:
           use_sticky_comment: true
           claude_args: |
             --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github__get_job_logs,mcp__github__submit_pending_pull_request_review,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/gh-pr-review.sh:*),Read,Glob,Grep,Write(/tmp/**),Skill"
+            --disallowedTools "Agent,Task"
             --model "claude-opus-4-8"
           prompt: |
             # Pull Request Context
@@ -824,7 +829,8 @@ jobs:
 
             **IMPORTANT - Sticky Comment Feature:**
             - This workflow uses sticky comments - your main review comment is automatically updated in place
-            - The sticky comment ID is available in the environment variable `CLAUDE_COMMENT_ID` (0 if this is the first review)
+            - The sticky comment ID for this PR is `${{ env.CLAUDE_COMMENT_ID }}` (`0` means this is the first review).
+              The value is inlined here - do NOT try to read `$CLAUDE_COMMENT_ID` from the shell, that command will be denied.
             - **CRITICAL:** Include `<!-- claude-code-review -->` at the start of your main review comment (after the heading) so it can be identified and updated
             - **DO NOT minimize the sticky comment** - it will be updated automatically
             - Only minimize OTHER old review comments (e.g., from before sticky comments were enabled)
@@ -992,6 +998,68 @@ jobs:
             2. **Use the sticky comment** - Your main review updates automatically, don't create duplicates
             3. **Avoid review spam** - PR conversations should be clean and easy to follow
 
+            ## Execution Environment - READ THIS
+
+            You are running **non-interactively** inside a GitHub Actions job. There is
+            no user, and **there is no next turn**. When you end your turn, the process
+            is killed immediately and anything you have not already written is lost.
+
+            - **NEVER end your turn to wait for something.** No background work, no
+              "I'll pause for notifications", no "waiting for results". Nothing will
+              ever arrive. If you stop, the review is silently lost and the job still
+              reports success.
+            - **Do all work inline, in this session.** Subagent dispatch is disabled.
+            - **Posting is the last thing you do.** Before you finish, you MUST have
+              called `mcp__github_comment__update_claude_comment` with your complete
+              review. A run that ends without that call is a failed review, and a
+              follow-up job will fail the build for it.
+            - If you run low on budget or context, **post what you have immediately**
+              with a note about what you did not get to. A partial posted review beats
+              a complete unposted one.
+
+            **Bash allowlist:** commands are matched against fixed prefixes. Anything
+            containing command substitution (`$(...)`), variable expansion (`$VAR`),
+            loops, or `;` chaining will be **denied**. Write plain, single-purpose
+            commands with literal arguments, and run them one at a time.
+
+      - name: Verify a review was actually posted
+        if: steps.create-check.outputs.should-skip != 'true' && steps.claude-review-action.outcome == 'success'
+        id: verify-review
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            // The action exits 0 even when the review session ends without posting
+            // anything (e.g. it ended its turn waiting on background work). Without
+            // this guard that failure mode is invisible: green job, no review.
+            const sha = context.payload.pull_request.head.sha;
+            const shortSha = sha.substring(0, 7);
+            const botName = '${{ vars.APP_BOT_NAME }}';
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const posted = comments.some(comment =>
+              comment.user.login === botName &&
+              comment.body.includes('<!-- claude-code-review -->') &&
+              (comment.body.includes(sha) || comment.body.includes(shortSha))
+            );
+
+            if (!posted) {
+              core.setFailed(
+                `Claude Code Review exited successfully but posted no review comment for ${shortSha}. ` +
+                `The session most likely ended without calling mcp__github_comment__update_claude_comment. ` +
+                `Check the "Run Claude Code Review" step output for the final result message, then re-run this job.`
+              );
+              return;
+            }
+
+            console.log(`Review comment for ${shortSha} confirmed.`);
+
       - name: Complete check - Review skipped
         if: always() && steps.create-check.outputs.should-skip == 'true'
         uses: actions/github-script@v9
@@ -1026,14 +1094,22 @@ jobs:
 
             const checkRunId = process.env.CHECK_RUN_ID;
             const reviewResult = '${{ steps.claude-review-action.outcome }}';
+            // 'failure' here means the action succeeded but posted nothing.
+            const verifyResult = '${{ steps.verify-review.outcome }}';
 
-            const conclusion = reviewResult === 'success' ? 'success' :
-                              reviewResult === 'failure' ? 'failure' :
+            const notPosted = verifyResult === 'failure';
+            const conclusion = (reviewResult === 'failure' || notPosted) ? 'failure' :
+                              reviewResult === 'success' ? 'success' :
                               'neutral';
 
-            const title = reviewResult === 'success' ? 'Review completed' :
+            const title = notPosted ? 'Review produced no comment' :
                          reviewResult === 'failure' ? 'Review failed' :
+                         reviewResult === 'success' ? 'Review completed' :
                          'Review completed with warnings';
+
+            const summary = notPosted
+              ? 'Claude Code Review ran to completion but never posted a review comment for this commit. This is a review failure, not a code failure - re-run the job.'
+              : 'Claude Code Review has completed. Check the pull request comments for detailed feedback.';
 
             await updateCheckWithRetry({
               owner: context.repo.owner,
@@ -1043,7 +1119,7 @@ jobs:
               conclusion: conclusion,
               output: {
                 title: title,
-                summary: 'Claude Code Review has completed. Check the pull request comments for detailed feedback.'
+                summary: summary
               }
             });
 
