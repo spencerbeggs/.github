@@ -535,10 +535,13 @@ jobs:
               per_page: 100
             });
 
+            // Note: the comment MCP server strips HTML comments from posted
+            // bodies, so a hidden `<!-- ... -->` marker can never appear in a
+            // live comment. The visible `# Code Review` heading IS the marker.
             const botName = '${{ vars.APP_BOT_NAME }}';
             const matches = comments.filter(comment =>
               comment.user.login === botName &&
-              (comment.body.includes('# Code Review') || comment.body.includes('<!-- claude-code-review -->'))
+              comment.body.includes('# Code Review')
             );
 
             // Take the most recent match. Older ones are stale pre-sticky reviews;
@@ -831,16 +834,16 @@ jobs:
             - This workflow uses sticky comments - your main review comment is automatically updated in place
             - The sticky comment ID for this PR is `${{ env.CLAUDE_COMMENT_ID }}` (`0` means this is the first review).
               The value is inlined here - do NOT try to read `$CLAUDE_COMMENT_ID` from the shell, that command will be denied.
-            - **CRITICAL:** Include `<!-- claude-code-review -->` at the start of your main review comment (after the heading) so it can be identified and updated
+            - **CRITICAL:** Your main review comment MUST start with the `# Code Review` heading and MUST contain the exact line shown in the format below, with the full 40-character commit SHA in backticks. A follow-up verification step greps the posted comment for both; a comment missing either fails the build.
+            - **Do NOT use HTML comments** (`<!-- ... -->`) as markers - the comment server strips them from the posted body, so they can never be matched later.
             - **DO NOT minimize the sticky comment** - it will be updated automatically
             - Only minimize OTHER old review comments (e.g., from before sticky comments were enabled)
 
-            **Main review comment format:**
+            **Main review comment format (copy the first three lines exactly):**
             ```markdown
             # Code Review
-            <!-- claude-code-review -->
 
-            **Current Commit:** abc1234
+            **Current Commit:** `${{ github.event.pull_request.head.sha }}`
 
             ## Summary
             ...your review content...
@@ -988,7 +991,10 @@ jobs:
             # Final Notes
 
             - **Current commit being reviewed:** ${{ github.event.pull_request.head.sha }}
-            - **Always mention this SHA** in your summary comment
+            - **Always include the full SHA** in your summary comment, using the
+              Current Commit line from the format template above - the post-review
+              verification step fails the build if the posted comment lacks the
+              `# Code Review` heading or this SHA
             - **Sticky comment feature is enabled** - your main review comment updates automatically
             - **Don't minimize the sticky comment (ID: ${{ env.CLAUDE_COMMENT_ID }})** - only minimize other old comments if absolutely necessary
 
@@ -1011,8 +1017,11 @@ jobs:
             - **Do all work inline, in this session.** Subagent dispatch is disabled.
             - **Posting is the last thing you do.** Before you finish, you MUST have
               called `mcp__github_comment__update_claude_comment` with your complete
-              review. A run that ends without that call is a failed review, and a
-              follow-up job will fail the build for it.
+              review, starting with the `# Code Review` heading and containing the
+              Current Commit line with the full SHA. A follow-up verification step
+              greps the posted comment for exactly those two things and fails the
+              build if either is missing - ending your turn without that call, or
+              posting a comment without them, is a failed review.
             - If you run low on budget or context, **post what you have immediately**
               with a note about what you did not get to. A partial posted review beats
               a complete unposted one.
@@ -1032,6 +1041,12 @@ jobs:
             // The action exits 0 even when the review session ends without posting
             // anything (e.g. it ended its turn waiting on background work). Without
             // this guard that failure mode is invisible: green job, no review.
+            //
+            // Match the visible contract the prompt mandates: the `# Code Review`
+            // heading plus this run's head SHA. Do NOT match on an HTML comment
+            // marker - the comment MCP server strips `<!-- ... -->` from posted
+            // bodies, so a hidden marker never survives to the live comment and
+            // requiring one fails every successful review.
             const sha = context.payload.pull_request.head.sha;
             const shortSha = sha.substring(0, 7);
             const botName = '${{ vars.APP_BOT_NAME }}';
@@ -1043,16 +1058,22 @@ jobs:
               per_page: 100
             });
 
-            const posted = comments.some(comment =>
+            const candidates = comments.filter(comment =>
               comment.user.login === botName &&
-              comment.body.includes('<!-- claude-code-review -->') &&
-              (comment.body.includes(sha) || comment.body.includes(shortSha))
+              comment.body.includes('# Code Review')
+            );
+
+            const posted = candidates.some(comment =>
+              comment.body.includes(sha) || comment.body.includes(shortSha)
             );
 
             if (!posted) {
+              const detail = candidates.length > 0
+                ? `A review comment exists but does not mention ${shortSha} - the session likely reviewed a stale commit or omitted the Current Commit line.`
+                : `The session most likely ended without calling mcp__github_comment__update_claude_comment.`;
               core.setFailed(
                 `Claude Code Review exited successfully but posted no review comment for ${shortSha}. ` +
-                `The session most likely ended without calling mcp__github_comment__update_claude_comment. ` +
+                detail + ' ' +
                 `Check the "Run Claude Code Review" step output for the final result message, then re-run this job.`
               );
               return;
