@@ -100,9 +100,12 @@ jobs:
       TURBO_TELEMETRY_DISABLED: "1"
       DO_NOT_TRACK: "1"
       TURBO_RUN_SUMMARY: "1"
+      CHECK_RUN_ID: ""
+      CLAUDE_COMMENT_ID: "0"
     permissions:
       contents: read
       checks: write
+      id-token: write
 
     steps:
       - name: Generate GitHub App token
@@ -111,7 +114,10 @@ jobs:
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-contents: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-actions: read
           permission-checks: write
 
       - name: Wait for token propagation
@@ -126,6 +132,10 @@ jobs:
           persist-credentials: true
           submodules: true
 
+      # Fail-fast: if check creation fails (GitHub flakiness), the job stops here.
+      # The later "Update * Check" steps are gated on this step's success so they
+      # never run against check IDs that were never created; the cleanup job
+      # resolves any partially-created checks as neutral.
       - name: Create validation checks
         id: create-checks
         uses: actions/github-script@v9
@@ -150,230 +160,12 @@ jobs:
               core.exportVariable(check.env_key, data.id);
             }
 
-      - name: Setup runtime
-        id: runtime
-        uses: savvy-web/silk-runtime-action@v1
-        with:
-          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
-          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
-          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
-          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
-          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
-
-      - name: Detect package manager
-        id: pm
-        run: |
-          PM=$(jq -r '.devEngines.packageManager.name // "npm"' package.json)
-          echo "name=$PM" >> $GITHUB_OUTPUT
-          case "$PM" in
-            bun) echo "exec=bun x" >> $GITHUB_OUTPUT ;;
-            pnpm) echo "exec=pnpm exec" >> $GITHUB_OUTPUT ;;
-            yarn) echo "exec=yarn exec" >> $GITHUB_OUTPUT ;;
-            *) echo "exec=npx --no" >> $GITHUB_OUTPUT ;;
-          esac
-
-      - name: Fetch base branch
-        run: git fetch origin ${{ github.base_ref }}
-
-      - name: Validate PR Title
-        id: pr-title
-        continue-on-error: true
-        env:
-          COMMITLINT_SKIP_DCO: "true"
-        run: |
-          set +e
-          ${{ steps.pm.outputs.exec }} commitlint --config lib/configs/commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
-
-      - name: Update PR Title Check
-        if: always()
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const ok = '${{ steps.pr-title.outputs.exit_code }}' === '0';
-            await github.rest.checks.update({
-              owner: context.repo.owner, repo: context.repo.repo,
-              check_run_id: process.env.PR_TITLE_CHECK_ID,
-              status: 'completed', conclusion: ok ? 'success' : 'failure',
-              output: { title: ok ? 'Valid' : 'Invalid', summary: ok ? 'PR title follows conventional format' : 'PR title must follow conventional format' }
-            });
-
-      - name: Validate Commits
-        id: commitlint
-        continue-on-error: true
-        run: |
-          set +e
-          ${{ steps.pm.outputs.exec }} commitlint --from=origin/${{ github.base_ref }} --to=HEAD --config lib/configs/commitlint.config.ts
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
-
-      - name: Update Commitlint Check
-        if: always()
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const ok = '${{ steps.commitlint.outputs.exit_code }}' === '0';
-            await github.rest.checks.update({
-              owner: context.repo.owner, repo: context.repo.repo,
-              check_run_id: process.env.COMMITLINT_CHECK_ID,
-              status: 'completed', conclusion: ok ? 'success' : 'failure',
-              output: { title: ok ? 'Valid' : 'Invalid', summary: ok ? 'All commits follow conventional format' : 'Some commits do not follow format' }
-            });
-
-      - name: Run Biome Lint
-        id: lint
-        continue-on-error: true
-        run: |
-          set +e
-          biome ci . --reporter=github 2>&1 | tee /tmp/biome-output.txt
-          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
-
-      - name: Update Lint Check
-        if: always()
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const fs = require('fs');
-            const ok = '${{ steps.lint.outputs.exit_code }}' === '0';
-            let annotations = [];
-            let text = '';
-            try {
-              text = fs.readFileSync('/tmp/biome-output.txt', 'utf8').trim();
-              // Parse GitHub workflow commands - fields can be in any order
-              // Format: ::error file=path,line=N,endLine=N,col=N,endColumn=N,title=...::message
-              const lineRegex = /^::(error|warning)\s+(.+)::(.+)$/gm;
-              let match;
-              while ((match = lineRegex.exec(text)) !== null && annotations.length < 50) {
-                const level = match[1];
-                const params = match[2];
-                const message = match[3];
-                // Parse key=value pairs (handles any order)
-                const fields = {};
-                for (const pair of params.split(',')) {
-                  const idx = pair.indexOf('=');
-                  if (idx > 0) {
-                    fields[pair.slice(0, idx)] = pair.slice(idx + 1);
-                  }
-                }
-                if (fields.file && fields.line) {
-                  annotations.push({
-                    path: fields.file,
-                    start_line: parseInt(fields.line, 10),
-                    end_line: fields.endLine ? parseInt(fields.endLine, 10) : parseInt(fields.line, 10),
-                    start_column: fields.col ? parseInt(fields.col, 10) : undefined,
-                    end_column: fields.endColumn ? parseInt(fields.endColumn, 10) : undefined,
-                    annotation_level: level === 'error' ? 'failure' : 'warning',
-                    message: message,
-                    title: fields.title || 'Biome'
-                  });
-                }
-              }
-            } catch (e) {}
-            await github.rest.checks.update({
-              owner: context.repo.owner, repo: context.repo.repo,
-              check_run_id: process.env.LINT_CHECK_ID,
-              status: 'completed', conclusion: ok ? 'success' : 'failure',
-              output: {
-                title: ok ? 'Passed' : `Failed (${annotations.length} issues)`,
-                summary: ok ? 'All checks passed' : `Biome found ${annotations.length} issue(s)`,
-                annotations: annotations.length > 0 ? annotations : undefined
-              }
-            });
-
-      - name: Run Markdownlint
-        id: markdownlint
-        continue-on-error: true
-        run: |
-          set +e
-          ${{ steps.pm.outputs.exec }} markdownlint-cli2 --config './lib/configs/.markdownlint-cli2.jsonc' 2>&1 | tee /tmp/markdownlint-output.txt
-          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
-
-      - name: Update Markdownlint Check
-        if: always()
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const fs = require('fs');
-            const ok = '${{ steps.markdownlint.outputs.exit_code }}' === '0';
-            let annotations = [];
-            try {
-              const text = fs.readFileSync('/tmp/markdownlint-output.txt', 'utf8');
-              const regex = /^([^:]+):(\d+)(?::(\d+))?\s+(error|warning)\s+(\S+)\s+(.+)$/gm;
-              let match;
-              while ((match = regex.exec(text)) !== null && annotations.length < 50) {
-                annotations.push({
-                  path: match[1],
-                  start_line: parseInt(match[2], 10),
-                  end_line: parseInt(match[2], 10),
-                  start_column: match[3] ? parseInt(match[3], 10) : undefined,
-                  annotation_level: match[4] === 'error' ? 'failure' : 'warning',
-                  message: match[6],
-                  title: match[5]
-                });
-              }
-            } catch (e) {}
-            await github.rest.checks.update({
-              owner: context.repo.owner, repo: context.repo.repo,
-              check_run_id: process.env.MARKDOWNLINT_CHECK_ID,
-              status: 'completed', conclusion: ok ? 'success' : 'failure',
-              output: {
-                title: ok ? 'Passed' : `Failed (${annotations.length} issues)`,
-                summary: ok ? 'All markdown files valid' : `Found ${annotations.length} issue(s)`,
-                annotations: annotations.length > 0 ? annotations : undefined
-              }
-            });
-
-      - name: Run Tests
-        id: test
-        continue-on-error: true
-        run: |
-          set +e
-          ${{ steps.pm.outputs.name }} run ci:test
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
-
-      - name: Update Test Check
-        if: always()
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const ok = '${{ steps.test.outputs.exit_code }}' === '0';
-            await github.rest.checks.update({
-              owner: context.repo.owner, repo: context.repo.repo,
-              check_run_id: process.env.TEST_CHECK_ID,
-              status: 'completed', conclusion: ok ? 'success' : 'failure',
-              output: { title: ok ? 'Passed' : 'Failed', summary: ok ? 'All tests passed' : 'Some tests failed' }
-            });
-
-  claude-review:
-    name: Claude Code Review
-    needs: [validate]
-    runs-on: ${{ inputs.runner }}
-    # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
-    if: ${{ github.event.pull_request.user.login == vars.APP_BOT_NAME || github.event.pull_request.user.login == 'copilot[bot]' || github.event.pull_request.user.type == 'User' }}
-    env:
-      CHECK_RUN_ID: ""
-      CLAUDE_COMMENT_ID: "0"
-    permissions:
-      contents: read
-      checks: write
-      id-token: write
-    steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-actions: read
-          permission-checks: write
-
+      # Decide early whether the Claude review will run. The skip decision only
+      # depends on the PR itself — not on validation results — so a skippable
+      # review has its check completed as success seconds into the job instead
+      # of after the whole test run. The review itself runs as the trailing
+      # steps of this job (reusing this runner, token and checkout) and is
+      # skipped entirely when should-skip is true.
       - name: Check if Claude is configured
         id: check-config
         run: |
@@ -383,14 +175,6 @@ jobs:
           else
             echo "configured=true" >> $GITHUB_OUTPUT
           fi
-
-      - name: Checkout repository
-        if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: true
 
       - name: Check if PR only contains version/changelog changes
         if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
@@ -454,13 +238,19 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            // Only review PRs from human users, the configured bot, or copilot
+            // (other bots like dependabot/renovate get an immediate skip).
+            const actor = context.payload.pull_request.user.login;
+            const actorType = context.payload.pull_request.user.type;
+            const allowedActor = actor === '${{ vars.APP_BOT_NAME }}' || actor === 'copilot[bot]' || actorType === 'User';
             const isConfigured = '${{ steps.check-config.outputs.configured }}' === 'true';
             const skipInput = '${{ inputs.skip-claude-review }}' === 'true';
             const skipChanges = '${{ steps.check-changes.outputs.skip-review }}' === 'true';
-            const shouldSkip = !isConfigured || skipInput || skipChanges;
+            const shouldSkip = !allowedActor || !isConfigured || skipInput || skipChanges;
 
             let skipReason = '';
-            if (!isConfigured) skipReason = 'Claude Code OAuth token not configured';
+            if (!allowedActor) skipReason = `Automated PR from ${actor} - review not required`;
+            else if (!isConfigured) skipReason = 'Claude Code OAuth token not configured';
             else if (skipInput) skipReason = 'Review skipped via workflow input';
             else if (skipChanges) skipReason = 'PR only contains version bumps, changelog updates, and/or deleted changeset files';
 
@@ -484,6 +274,204 @@ jobs:
             core.exportVariable('CHECK_RUN_ID', checkRun.id);
             core.setOutput('should-skip', shouldSkip);
             console.log(`Created check run ${checkRun.id}, shouldSkip: ${shouldSkip}`);
+
+      - name: Setup runtime
+        id: runtime
+        uses: savvy-web/silk-runtime-action@v1
+        with:
+          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
+          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
+          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
+          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
+          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
+
+      - name: Detect package manager
+        id: pm
+        run: |
+          PM=$(jq -r '.devEngines.packageManager.name // "npm"' package.json)
+          echo "name=$PM" >> $GITHUB_OUTPUT
+          case "$PM" in
+            bun) echo "exec=bun x" >> $GITHUB_OUTPUT ;;
+            pnpm) echo "exec=pnpm exec" >> $GITHUB_OUTPUT ;;
+            yarn) echo "exec=yarn exec" >> $GITHUB_OUTPUT ;;
+            *) echo "exec=npx --no" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.base_ref }}
+
+      - name: Validate PR Title
+        id: pr-title
+        continue-on-error: true
+        env:
+          COMMITLINT_SKIP_DCO: "true"
+        run: |
+          set +e
+          ${{ steps.pm.outputs.exec }} commitlint --config lib/configs/commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      - name: Update PR Title Check
+        if: always() && steps.create-checks.outcome == 'success'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const ok = '${{ steps.pr-title.outputs.exit_code }}' === '0';
+            await github.rest.checks.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              check_run_id: process.env.PR_TITLE_CHECK_ID,
+              status: 'completed', conclusion: ok ? 'success' : 'failure',
+              output: { title: ok ? 'Valid' : 'Invalid', summary: ok ? 'PR title follows conventional format' : 'PR title must follow conventional format' }
+            });
+
+      - name: Validate Commits
+        id: commitlint
+        continue-on-error: true
+        run: |
+          set +e
+          ${{ steps.pm.outputs.exec }} commitlint --from=origin/${{ github.base_ref }} --to=HEAD --config lib/configs/commitlint.config.ts
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      - name: Update Commitlint Check
+        if: always() && steps.create-checks.outcome == 'success'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const ok = '${{ steps.commitlint.outputs.exit_code }}' === '0';
+            await github.rest.checks.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              check_run_id: process.env.COMMITLINT_CHECK_ID,
+              status: 'completed', conclusion: ok ? 'success' : 'failure',
+              output: { title: ok ? 'Valid' : 'Invalid', summary: ok ? 'All commits follow conventional format' : 'Some commits do not follow format' }
+            });
+
+      - name: Run Biome Lint
+        id: lint
+        continue-on-error: true
+        run: |
+          set +e
+          biome ci . --reporter=github 2>&1 | tee /tmp/biome-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Update Lint Check
+        if: always() && steps.create-checks.outcome == 'success'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const ok = '${{ steps.lint.outputs.exit_code }}' === '0';
+            let annotations = [];
+            let text = '';
+            try {
+              text = fs.readFileSync('/tmp/biome-output.txt', 'utf8').trim();
+              // Parse GitHub workflow commands - fields can be in any order
+              // Format: ::error file=path,line=N,endLine=N,col=N,endColumn=N,title=...::message
+              const lineRegex = /^::(error|warning)\s+(.+)::(.+)$/gm;
+              let match;
+              while ((match = lineRegex.exec(text)) !== null && annotations.length < 50) {
+                const level = match[1];
+                const params = match[2];
+                const message = match[3];
+                // Parse key=value pairs (handles any order)
+                const fields = {};
+                for (const pair of params.split(',')) {
+                  const idx = pair.indexOf('=');
+                  if (idx > 0) {
+                    fields[pair.slice(0, idx)] = pair.slice(idx + 1);
+                  }
+                }
+                if (fields.file && fields.line) {
+                  annotations.push({
+                    path: fields.file,
+                    start_line: parseInt(fields.line, 10),
+                    end_line: fields.endLine ? parseInt(fields.endLine, 10) : parseInt(fields.line, 10),
+                    start_column: fields.col ? parseInt(fields.col, 10) : undefined,
+                    end_column: fields.endColumn ? parseInt(fields.endColumn, 10) : undefined,
+                    annotation_level: level === 'error' ? 'failure' : 'warning',
+                    message: message,
+                    title: fields.title || 'Biome'
+                  });
+                }
+              }
+            } catch (e) {}
+            await github.rest.checks.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              check_run_id: process.env.LINT_CHECK_ID,
+              status: 'completed', conclusion: ok ? 'success' : 'failure',
+              output: {
+                title: ok ? 'Passed' : `Failed (${annotations.length} issues)`,
+                summary: ok ? 'All checks passed' : `Biome found ${annotations.length} issue(s)`,
+                annotations: annotations.length > 0 ? annotations : undefined
+              }
+            });
+
+      - name: Run Markdownlint
+        id: markdownlint
+        continue-on-error: true
+        run: |
+          set +e
+          ${{ steps.pm.outputs.exec }} markdownlint-cli2 --config './lib/configs/.markdownlint-cli2.jsonc' 2>&1 | tee /tmp/markdownlint-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Update Markdownlint Check
+        if: always() && steps.create-checks.outcome == 'success'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const ok = '${{ steps.markdownlint.outputs.exit_code }}' === '0';
+            let annotations = [];
+            try {
+              const text = fs.readFileSync('/tmp/markdownlint-output.txt', 'utf8');
+              const regex = /^([^:]+):(\d+)(?::(\d+))?\s+(error|warning)\s+(\S+)\s+(.+)$/gm;
+              let match;
+              while ((match = regex.exec(text)) !== null && annotations.length < 50) {
+                annotations.push({
+                  path: match[1],
+                  start_line: parseInt(match[2], 10),
+                  end_line: parseInt(match[2], 10),
+                  start_column: match[3] ? parseInt(match[3], 10) : undefined,
+                  annotation_level: match[4] === 'error' ? 'failure' : 'warning',
+                  message: match[6],
+                  title: match[5]
+                });
+              }
+            } catch (e) {}
+            await github.rest.checks.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              check_run_id: process.env.MARKDOWNLINT_CHECK_ID,
+              status: 'completed', conclusion: ok ? 'success' : 'failure',
+              output: {
+                title: ok ? 'Passed' : `Failed (${annotations.length} issues)`,
+                summary: ok ? 'All markdown files valid' : `Found ${annotations.length} issue(s)`,
+                annotations: annotations.length > 0 ? annotations : undefined
+              }
+            });
+
+      - name: Run Tests
+        id: test
+        continue-on-error: true
+        run: |
+          set +e
+          ${{ steps.pm.outputs.name }} run ci:test
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      - name: Update Test Check
+        if: always() && steps.create-checks.outcome == 'success'
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const ok = '${{ steps.test.outputs.exit_code }}' === '0';
+            await github.rest.checks.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              check_run_id: process.env.TEST_CHECK_ID,
+              status: 'completed', conclusion: ok ? 'success' : 'failure',
+              output: { title: ok ? 'Passed' : 'Failed', summary: ok ? 'All tests passed' : 'Some tests failed' }
+            });
 
       - name: Update check - Starting review
         if: steps.create-check.outputs.should-skip != 'true'
@@ -1081,17 +1069,8 @@ jobs:
 
             console.log(`Review comment for ${shortSha} confirmed.`);
 
-      - name: Complete check - Review skipped
-        if: always() && steps.create-check.outputs.should-skip == 'true'
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            // Check already created as completed in create-check step
-            console.log('Review was skipped - check already completed');
-
       - name: Complete check - Review completed
-        if: always() && steps.create-check.outputs.should-skip != 'true'
+        if: always() && steps.create-check.outcome == 'success' && steps.create-check.outputs.should-skip != 'true'
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -1119,6 +1098,8 @@ jobs:
             const verifyResult = '${{ steps.verify-review.outcome }}';
 
             const notPosted = verifyResult === 'failure';
+            // 'skipped' means an earlier step hard-failed the job before the
+            // review ran - close the queued check honestly rather than strand it.
             const conclusion = (reviewResult === 'failure' || notPosted) ? 'failure' :
                               reviewResult === 'success' ? 'success' :
                               'neutral';
@@ -1126,11 +1107,14 @@ jobs:
             const title = notPosted ? 'Review produced no comment' :
                          reviewResult === 'failure' ? 'Review failed' :
                          reviewResult === 'success' ? 'Review completed' :
+                         reviewResult === 'skipped' ? 'Review did not run' :
                          'Review completed with warnings';
 
             const summary = notPosted
               ? 'Claude Code Review ran to completion but never posted a review comment for this commit. This is a review failure, not a code failure - re-run the job.'
-              : 'Claude Code Review has completed. Check the pull request comments for detailed feedback.';
+              : reviewResult === 'skipped'
+                ? 'The validation job failed before the review step could run.'
+                : 'Claude Code Review has completed. Check the pull request comments for detailed feedback.';
 
             await updateCheckWithRetry({
               owner: context.repo.owner,
@@ -1146,7 +1130,7 @@ jobs:
 
   cleanup:
     name: Cleanup
-    needs: [validate, claude-review]
+    needs: [validate]
     runs-on: ${{ inputs.runner }}
     if: always()
     permissions:
@@ -1189,7 +1173,10 @@ jobs:
               ref: context.payload.pull_request.head.sha
             });
 
-            const inProgressChecks = data.check_runs.filter(x => names.includes(x.name) && x.status === 'in_progress');
+            // 'queued' included: the Claude Code Review check is now created
+            // early (queued) and would be stranded if the run is cancelled
+            // before the review steps execute.
+            const inProgressChecks = data.check_runs.filter(x => names.includes(x.name) && (x.status === 'in_progress' || x.status === 'queued'));
 
             if (inProgressChecks.length === 0) {
               console.log('No in-progress checks to clean up');
