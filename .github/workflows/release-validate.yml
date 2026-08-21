@@ -184,10 +184,28 @@ jobs:
           case "$HEAD_REF" in
             pnpm/config-deps | copilot/* | dependabot/* | changeset-release/*)
               echo "skip-review=true" >> $GITHUB_OUTPUT
+              echo "skip-reason=Branch $HEAD_REF is an automated update (covered by preflight reviews)" >> $GITHUB_OUTPUT
               echo "Skipping Claude review - branch '$HEAD_REF' is an automated update (covered by preflight reviews)"
               exit 0
               ;;
           esac
+
+          # A repo that uses changesets tells us directly whether this PR carries
+          # release-worthy work: no changeset files means nothing to review. A repo
+          # with no .changeset directory is not using changesets at all, so its
+          # absence is not a signal - fall through to the file-based checks below.
+          if [ -d .changeset ]; then
+            CHANGESET_COUNT=$(find .changeset -maxdepth 1 -type f -name '*.md' ! -name 'README.md' | wc -l | tr -d ' ')
+            if [ "$CHANGESET_COUNT" -eq 0 ]; then
+              echo "skip-review=true" >> $GITHUB_OUTPUT
+              echo "skip-reason=No changesets present in .changeset/ - nothing release-worthy to review" >> $GITHUB_OUTPUT
+              echo "Skipping Claude review - no changesets present in .changeset/"
+              exit 0
+            fi
+            echo "Found $CHANGESET_COUNT changeset(s) in .changeset/ - review is warranted"
+          else
+            echo "No .changeset directory - changeset presence is not a signal in this repo"
+          fi
 
           git fetch origin ${{ github.base_ref }}
           CHANGED_FILES_WITH_STATUS=$(git diff --name-status origin/${{ github.base_ref }}...HEAD)
@@ -227,6 +245,7 @@ jobs:
           echo "skip-review=$SKIP_REVIEW" >> $GITHUB_OUTPUT
 
           if [ "$SKIP_REVIEW" = "true" ]; then
+            echo "skip-reason=PR only contains version bumps, changelog updates, and/or deleted changeset files" >> $GITHUB_OUTPUT
             echo "Skipping Claude review - PR only contains version bumps, changelog updates, and/or deleted changeset files"
           else
             echo "Running Claude review - PR contains substantive changes"
@@ -235,6 +254,8 @@ jobs:
       - name: Create Claude Review check
         id: create-check
         uses: actions/github-script@v9
+        env:
+          SKIP_REASON: ${{ steps.check-changes.outputs.skip-reason }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -252,7 +273,7 @@ jobs:
             if (!allowedActor) skipReason = `Automated PR from ${actor} - review not required`;
             else if (!isConfigured) skipReason = 'Claude Code OAuth token not configured';
             else if (skipInput) skipReason = 'Review skipped via workflow input';
-            else if (skipChanges) skipReason = 'PR only contains version bumps, changelog updates, and/or deleted changeset files';
+            else if (skipChanges) skipReason = process.env.SKIP_REASON || 'PR only contains version bumps, changelog updates, and/or deleted changeset files';
 
             const params = {
               owner: context.repo.owner,
