@@ -42,6 +42,11 @@ on:
         type: string
         required: false
         default: ""
+      on-build:
+        description: Optional command run after the validation build; a non-zero exit fails the phase. Purely a gate -- it must not mutate the repository, and this job's access scope is unchanged whether it is set or not.
+        type: string
+        required: false
+        default: ""
     secrets:
       APP_PRIVATE_KEY:
         required: true
@@ -92,6 +97,7 @@ jobs:
           release-branch: changeset-release/main
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
           sbom-config: ${{ inputs.sbom-config }}
+          on-build: ${{ inputs.on-build }}
 
   validate:
     name: Code Validation

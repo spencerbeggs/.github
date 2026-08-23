@@ -25,6 +25,11 @@ on:
         description: Comma-separated list of bot names allowed to trigger review, or "*" for all
         type: string
         default: "*"
+      on-build:
+        description: Optional command run after the validation build; a non-zero exit fails the phase. Purely a gate -- it must not mutate the repository, and this job's access scope is unchanged whether it is set or not.
+        type: string
+        required: false
+        default: ""
     secrets:
       APP_ID:
         required: true
@@ -98,6 +103,7 @@ jobs:
       skip-claude-review: ${{ inputs.skip-claude-review }}
       claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+      on-build: ${{ inputs.on-build }}
       runner: ${{ inputs.runner }}
     secrets: inherit
 
