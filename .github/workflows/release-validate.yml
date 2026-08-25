@@ -153,7 +153,8 @@ jobs:
               { name: 'Conventional Commits', env_key: 'COMMITLINT_CHECK_ID' },
               { name: 'Code Quality', env_key: 'LINT_CHECK_ID' },
               { name: 'Markdown', env_key: 'MARKDOWNLINT_CHECK_ID' },
-              { name: 'Tests', env_key: 'TEST_CHECK_ID' }
+              { name: 'Tests', env_key: 'TEST_CHECK_ID' },
+              { name: 'Shell Tests', env_key: 'BATS_CHECK_ID' }
             ];
             for (const check of checks) {
               const { data } = await github.rest.checks.create({
@@ -498,6 +499,173 @@ jobs:
               check_run_id: process.env.TEST_CHECK_ID,
               status: 'completed', conclusion: ok ? 'success' : 'failure',
               output: { title: ok ? 'Passed' : 'Failed', summary: ok ? 'All tests passed' : 'Some tests failed' }
+            });
+
+      # Discovery is deliberately `git ls-files` rather than a `bats --recursive`
+      # walk or a `test:bats` script. Tracked-files-only excludes node_modules
+      # for free, ls-files never descends into submodules, and it does not care
+      # where a repository keeps its `__test__` directory -- the one thing that
+      # varies most across consumers. The exclusions encode the house layout:
+      # fixture trees hold `.bats` files that are inputs to a test, not suites.
+      #
+      # `glob` magic on every exclude is load-bearing. Without it git's `*` also
+      # matches `/`, so a leading `**/` requires at least one directory before
+      # the match and a ROOT-level `__fixtures__/` is not excluded at all.
+      - name: Discover BATS suites
+        id: bats-files
+        run: |
+          set -euo pipefail
+          git ls-files -z -- '*.bats' \
+            ':(exclude,glob)**/__fixtures__/**' \
+            ':(exclude,glob)**/__test__/fixtures/**' \
+            ':(exclude,glob)**/__test__/e2e/fixtures/**' \
+            ':(exclude,glob)**/__test__/int/fixtures/**' \
+            ':(exclude,glob).repos/**' \
+            ':(exclude,glob)**/dist/**' \
+            ':(exclude,glob)**/node_modules/**' > "$RUNNER_TEMP/bats-files.z"
+          COUNT=$(tr -cd '\0' < "$RUNNER_TEMP/bats-files.z" | wc -c | tr -d ' ')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Discovered $COUNT BATS file(s)"
+          tr '\0' '\n' < "$RUNNER_TEMP/bats-files.z"
+
+      - name: Run BATS
+        id: bats
+        if: steps.bats-files.outputs.count != '0' && steps.runtime.outputs.bats-enabled == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          # bats exits with a usage dump if --output names a directory that does
+          # not already exist.
+          mkdir -p "$RUNNER_TEMP/bats-report"
+          # Read into an array rather than piping through xargs: xargs may split
+          # a long file list across several bats invocations, and each one would
+          # overwrite report.xml, leaving only the final batch's results.
+          mapfile -d '' FILES < "$RUNNER_TEMP/bats-files.z"
+          # --report-formatter, not --formatter: this writes report.xml for the
+          # annotations while leaving human-readable TAP on the job log. Plain
+          # `--formatter junit` would put the XML on stdout and nothing else.
+          bats --report-formatter junit --output "$RUNNER_TEMP/bats-report" "${FILES[@]}"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Update Shell Tests Check
+        if: always() && steps.create-checks.outcome == 'success'
+        uses: actions/github-script@v9
+        env:
+          BATS_FILE_COUNT: ${{ steps.bats-files.outputs.count }}
+          BATS_ENABLED: ${{ steps.runtime.outputs.bats-enabled }}
+          BATS_EXIT_CODE: ${{ steps.bats.outputs.exit_code }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const count = parseInt(process.env.BATS_FILE_COUNT || '0', 10);
+            const enabled = process.env.BATS_ENABLED === 'true';
+
+            // Unescape XML entities. `&amp;` MUST be last so an escaped literal
+            // like `&amp;lt;` is not double-decoded into `<`.
+            const decode = (s) => s
+              .replace(/&lt;/g, '<')
+              .replace(/&gt;/g, '>')
+              .replace(/&quot;/g, '"')
+              .replace(/&#39;/g, "'")
+              .replace(/&apos;/g, "'")
+              .replace(/&amp;/g, '&');
+
+            let result = { status: 'completed', conclusion: 'success', output: {} };
+
+            if (count === 0) {
+              result.output = { title: 'No shell tests', summary: 'No tracked `.bats` files were found, so there was nothing to run.' };
+            } else if (!enabled) {
+              // Suites exist but the toolchain is off -- either `bats: false` was
+              // set explicitly or auto-detection missed them. Neutral rather than
+              // failure: it does not block the PR, but it does not read as a
+              // clean pass either, so the mismatch stays visible.
+              result.conclusion = 'neutral';
+              result.output = {
+                title: 'BATS not provisioned',
+                summary: `Found ${count} \`.bats\` file(s), but the BATS toolchain was not installed, so no shell tests ran.`
+              };
+            } else {
+              const ok = process.env.BATS_EXIT_CODE === '0';
+              const totals = { tests: 0, failures: 0, errors: 0, skipped: 0 };
+              const annotations = [];
+              try {
+                const xml = fs.readFileSync(`${process.env.RUNNER_TEMP}/bats-report/report.xml`, 'utf8');
+
+                const suiteRe = /<testsuite\s+([^>]*)>/g;
+                let m;
+                while ((m = suiteRe.exec(xml)) !== null) {
+                  for (const key of Object.keys(totals)) {
+                    const attr = new RegExp(`\\b${key}="(\\d+)"`).exec(m[1]);
+                    if (attr) totals[key] += parseInt(attr[1], 10);
+                  }
+                }
+
+                // Passing cases are self-closing; failed and skipped ones wrap a body.
+                const caseRe = /<testcase\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
+                while ((m = caseRe.exec(xml)) !== null && annotations.length < 50) {
+                  const body = m[2];
+                  if (!body) continue;
+                  const fail = /<(failure|error)\b[^>]*>([\s\S]*?)<\/\1>/.exec(body);
+                  if (!fail) continue;
+
+                  const nameAttr = /\bname="([^"]*)"/.exec(m[1]);
+                  const message = decode(fail[2]).trim();
+
+                  // `classname` carries only a basename, so the path has to come
+                  // from the failure body. A failure raised inside a helper emits
+                  // two frames across two lines -- `(from function 'f' in file
+                  // helper.bash, line 2,\n in test file t.bats, line 4)` -- and the
+                  // LAST `in test file` match is the test's own frame, which is the
+                  // location worth annotating.
+                  let path, line;
+                  const refRe = /in test file ([^,]+), line (\d+)/g;
+                  let ref;
+                  while ((ref = refRe.exec(message)) !== null) {
+                    path = ref[1].trim();
+                    line = parseInt(ref[2], 10);
+                  }
+                  if (!path) continue;
+
+                  annotations.push({
+                    path,
+                    start_line: line,
+                    end_line: line,
+                    annotation_level: 'failure',
+                    message,
+                    title: nameAttr ? decode(nameAttr[1]) : 'bats test'
+                  });
+                }
+              } catch (e) {
+                console.log(`Could not read the BATS junit report: ${e.message}`);
+              }
+
+              const failed = totals.failures + totals.errors;
+              const skipNote = totals.skipped > 0 ? `, ${totals.skipped} skipped` : '';
+              result.conclusion = ok ? 'success' : 'failure';
+              if (totals.tests === 0) {
+                // bats exited before writing a parseable report -- a suite that
+                // failed to load, a missing helper, a crashed run. Reporting
+                // "0 of 0" here would read as though nothing went wrong, so say
+                // plainly that the report is the thing that is missing.
+                result.output = ok
+                  ? { title: 'No shell tests', summary: `Ran ${count} \`.bats\` file(s); the report contained no test cases.` }
+                  : { title: 'Failed to run', summary: `BATS exited non-zero without producing a readable report. Check the job log for ${count} \`.bats\` file(s).` };
+              } else {
+                result.output = {
+                  title: ok ? `Passed (${totals.tests} tests)` : `Failed (${failed} of ${totals.tests})`,
+                  summary: ok
+                    ? `All ${totals.tests} shell test(s) passed across ${count} file(s)${skipNote}.`
+                    : `${failed} of ${totals.tests} shell test(s) failed across ${count} file(s)${skipNote}.`,
+                  annotations: annotations.length > 0 ? annotations : undefined
+                };
+              }
+            }
+
+            await github.rest.checks.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              check_run_id: process.env.BATS_CHECK_ID,
+              ...result
             });
 
       - name: Update check - Starting review
@@ -1193,7 +1361,7 @@ jobs:
               }
             }
 
-            const names = ['PR Title Validation', 'Conventional Commits', 'Code Quality', 'Markdown', 'Tests', 'Claude Code Review'];
+            const names = ['PR Title Validation', 'Conventional Commits', 'Code Quality', 'Markdown', 'Tests', 'Shell Tests', 'Claude Code Review'];
             const { data } = await github.rest.checks.listForRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
