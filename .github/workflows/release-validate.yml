@@ -64,6 +64,9 @@ jobs:
   pre-publish:
     name: Pre-Publish Validation
     runs-on: ${{ inputs.runner }}
+    concurrency:
+      group: example-group
+      cancel-in-progress: true
     if: inputs.phase == 'validation'
     env:
       TURBO_TELEMETRY_DISABLED: "1"
@@ -102,6 +105,9 @@ jobs:
   validate:
     name: Code Validation
     runs-on: ${{ inputs.runner }}
+    concurrency:
+      group: example-group
+      cancel-in-progress: true
     env:
       TURBO_TELEMETRY_DISABLED: "1"
       DO_NOT_TRACK: "1"
