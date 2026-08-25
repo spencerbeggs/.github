@@ -81,7 +81,7 @@ jobs:
   branch-management:
     name: Branch Management
     needs: control
-    if: needs.control.outputs.phase == 'branch-management'
+    if: needs.control.outputs.phase == 'branch-management' && github.event.action != 'closed'
     uses: spencerbeggs/.github/.github/workflows/release-branch.yml@main
     with:
       dry-run: ${{ inputs.dry-run }}
@@ -92,9 +92,13 @@ jobs:
   validation:
     name: Validation
     needs: control
-    if: |
-      needs.control.outputs.is_pr_event == 'true' &&
-      needs.control.outputs.is_pr_merged != 'true'
+    # One validation per pull request. A newer run in the same group cancels the
+    # older one; the group must NOT match the caller's workflow-level group, or
+    # the two cancel each other (see GitHub's reusable-workflow concurrency note).
+    concurrency:
+      group: silk-validation-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    if: needs.control.outputs.is_pr_event == 'true' && github.event.action != 'closed'
     uses: spencerbeggs/.github/.github/workflows/release-validate.yml@main
     with:
       phase: ${{ needs.control.outputs.phase }}
@@ -110,7 +114,7 @@ jobs:
   publish:
     name: Publish
     needs: control
-    if: needs.control.outputs.phase == 'publishing' || needs.control.outputs.phase == 'close-issues'
+    if: (needs.control.outputs.phase == 'publishing' || needs.control.outputs.phase == 'close-issues') && github.event.action != 'closed'
     uses: spencerbeggs/.github/.github/workflows/release-publish.yml@main
     with:
       phase: ${{ needs.control.outputs.phase }}
