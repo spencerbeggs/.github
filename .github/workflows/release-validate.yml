@@ -540,7 +540,16 @@ jobs:
           # Read into an array rather than piping through xargs: xargs may split
           # a long file list across several bats invocations, and each one would
           # overwrite report.xml, leaving only the final batch's results.
-          mapfile -d '' FILES < "$RUNNER_TEMP/bats-files.z"
+          #
+          # A `while read -d ''` loop, not `mapfile -d ''`: macOS runners ship
+          # bash 3.2, where mapfile does not exist (and -d needs bash 4.4 even
+          # where it does). The final entry has no trailing NUL terminator only
+          # if the list is malformed, so the `[ -n "$f" ]` guard catches the
+          # last read returning non-zero with data still in $f.
+          FILES=()
+          while IFS= read -r -d '' f || [ -n "$f" ]; do
+            FILES+=("$f")
+          done < "$RUNNER_TEMP/bats-files.z"
           # --report-formatter, not --formatter: this writes report.xml for the
           # annotations while leaving human-readable TAP on the job log. Plain
           # `--formatter junit` would put the XML on stdout and nothing else.
