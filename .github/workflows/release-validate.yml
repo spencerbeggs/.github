@@ -479,26 +479,83 @@ jobs:
               }
             });
 
+      # `$GITHUB_STEP_SUMMARY` is one append-only file shared by every step in
+      # the job, so "what did the test run write" is a byte range, not a file
+      # of its own. Record the length before the run and slice off whatever was
+      # appended after it: the job summary still renders exactly as it did, and
+      # the slice becomes the body of the Tests check run.
+      #
+      # Nothing here pipes the child's stdout. Vitest's github-actions reporter
+      # emits `::error file=...` workflow commands that only become annotations
+      # if the runner sees them on the step's own stdout, and a `| tee` also
+      # flips the reporter's TTY detection. The lint steps can afford `tee`
+      # because their output is parsed after the fact; this one cannot.
       - name: Run Tests
         id: test
         continue-on-error: true
         run: |
           set +e
+          SUMMARY_BEFORE=0
+          if [ -f "$GITHUB_STEP_SUMMARY" ]; then
+            SUMMARY_BEFORE=$(wc -c < "$GITHUB_STEP_SUMMARY" | tr -d ' ')
+          fi
           ${{ steps.pm.outputs.name }} run ci:test
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
+          TEST_EXIT=$?
+          echo "exit_code=$TEST_EXIT" >> "$GITHUB_OUTPUT"
+          : > "$RUNNER_TEMP/test-summary.md"
+          if [ -f "$GITHUB_STEP_SUMMARY" ]; then
+            tail -c "+$((SUMMARY_BEFORE + 1))" "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/test-summary.md"
+          fi
+          echo "Captured $(wc -c < "$RUNNER_TEMP/test-summary.md" | tr -d ' ') byte(s) of job summary from the test run"
 
       - name: Update Test Check
         if: always() && steps.create-checks.outcome == 'success'
         uses: actions/github-script@v9
+        env:
+          TEST_EXIT_CODE: ${{ steps.test.outputs.exit_code }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const ok = '${{ steps.test.outputs.exit_code }}' === '0';
+            const fs = require('fs');
+            const ok = process.env.TEST_EXIT_CODE === '0';
+
+            // Point the check's "Details" link at this job's page, which is
+            // where GitHub renders the full step summary. The REST API has no
+            // "which job am I" lookup, so match the job still executing on this
+            // runner; the run URL is the fallback when that misses.
+            let detailsUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            try {
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner: context.repo.owner, repo: context.repo.repo,
+                run_id: context.runId, filter: 'latest', per_page: 100
+              });
+              const self = jobs.find((j) => j.status === 'in_progress' && j.runner_name === process.env.RUNNER_NAME);
+              if (self && self.html_url) { detailsUrl = self.html_url; }
+            } catch (e) {}
+
+            // The checks API caps `output.text` at 65535 characters.
+            const LIMIT = 65000;
+            let text = '';
+            try {
+              text = fs.readFileSync(`${process.env.RUNNER_TEMP}/test-summary.md`, 'utf8').trim();
+            } catch (e) {}
+            if (text.length > LIMIT) {
+              text = `${text.slice(0, LIMIT)}\n\n_Truncated. See the [full job summary](${detailsUrl})._`;
+            }
+            if (!text) {
+              text = `The test run appended nothing to the job summary. See the [job log](${detailsUrl}).`;
+            }
+
             await github.rest.checks.update({
               owner: context.repo.owner, repo: context.repo.repo,
               check_run_id: process.env.TEST_CHECK_ID,
               status: 'completed', conclusion: ok ? 'success' : 'failure',
-              output: { title: ok ? 'Passed' : 'Failed', summary: ok ? 'All tests passed' : 'Some tests failed' }
+              details_url: detailsUrl,
+              output: {
+                title: ok ? 'Passed' : 'Failed',
+                summary: ok ? 'All tests passed' : 'Some tests failed',
+                text
+              }
             });
 
       # Discovery is deliberately `git ls-files` rather than a `bats --recursive`
