@@ -21,6 +21,10 @@ on:
         description: Skip Claude Code review for this run
         type: boolean
         default: false
+      claude-debug:
+        description: Enable debug logging for Claude Code review
+        type: boolean
+        default: false
       claude-review-allowed-bots:
         description: Comma-separated list of bot names allowed to trigger review, or "*" for all
         type: string
@@ -104,6 +108,7 @@ jobs:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
       auto-merge: ${{ inputs.auto-merge }}
+      claude-debug: ${{ inputs.claude-debug }}
       skip-claude-review: ${{ inputs.skip-claude-review }}
       claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}

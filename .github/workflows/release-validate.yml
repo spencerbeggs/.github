@@ -25,6 +25,10 @@ on:
         description: Skip Claude Code review for this run
         type: boolean
         default: false
+      claude-debug:
+        description: Enable debug logging for Claude Code review
+        type: boolean
+        default: false
       claude-review-allowed-bots:
         description: Comma-separated list of bot names allowed to trigger review, or "*" for all
         type: string
@@ -822,7 +826,7 @@ jobs:
           allowed_bots: ${{ inputs.claude-review-allowed-bots }}
           plugin_marketplaces: ${{ inputs.claude-review-plugin-marketplaces }}
           plugins: ${{ inputs.claude-review-plugins }}
-          show_full_output: true
+          show_full_output: ${{ inputs.claude-debug }}
           exclude_comments_by_actor: "socket-security[bot]"
           use_sticky_comment: true
           claude_args: |
