@@ -72,7 +72,7 @@ jobs:
 
       - name: Run release
         id: release
-        uses: savvy-web/silk-release-action@v4
+        uses: savvy-web/silk-release-action@v5
         with:
           phase: ${{ inputs.phase }}
           app-client-id: ${{ vars.APP_CLIENT_ID }}
@@ -91,7 +91,7 @@ jobs:
         # succeeded/package-count/release-pr-number) — this condition always
         # evaluated false, so this step and everything gated on it below never
         # actually ran. Gate on the real phase/succeeded outputs instead.
-        if: steps.release.outputs.phase == 'publishing' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
+        if: steps.release.outputs.phase == 'publish' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
@@ -99,18 +99,22 @@ jobs:
           owner: spencerbeggs
 
       - name: Notify package release router
-        if: steps.release.outputs.phase == 'publishing' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
+        if: steps.release.outputs.phase == 'publish' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RESULT: ${{ steps.release.outputs.result }}
         run: |
           set -euo pipefail
 
-          # Package names actually published this run (skips packages that
-          # were only considered but skipped/failed) from the structured
-          # `result` output — see silk-release-action.output.schema.json,
-          # PublishingOutput.publishing.packages[].
-          packages=$(echo "$RESULT" | jq -r '[.publishing.packages[] | select(.status == "published") | .name] | join(",")')
+          # Package names actually published this run, from the structured
+          # `result` output. A workspace may publish several packages, under
+          # more than one name, to more than one registry, so this flattens the
+          # workspace map and dedupes. `outcome == "published"` means bytes were
+          # uploaded — it deliberately excludes `recovered` (already on the
+          # registry at an identical digest), which is a success but not a new
+          # publication. See schemas/5.0.0/silk-release-action-5.0.0.json,
+          # PublishOutput.publish.workspaces[].packages[].
+          packages=$(echo "$RESULT" | jq -r '[.publish.workspaces[].packages[] | select(.outcome == "published") | .name] | unique | join(",")')
 
           if [ -z "$packages" ]; then
             echo "No packages published this run; skipping router notification."
@@ -130,7 +134,7 @@ jobs:
             -f "client_payload[sha]=$release_sha"
 
       - name: Notify marketplace repo
-        if: steps.release.outputs.phase == 'publishing' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
+        if: steps.release.outputs.phase == 'publish' && steps.release.outputs.succeeded == 'true' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RESULT: ${{ steps.release.outputs.result }}
@@ -156,16 +160,28 @@ jobs:
             spencerbeggs/vitest-agent)
               # Dispatches only when @vitest-agent/plugin itself published —
               # the marketplace plugin and the npm package share a version.
-              if echo "$RESULT" | jq -e '.publishing.packages[] | select(.name == "@vitest-agent/plugin" and .status == "published")' >/dev/null; then
+              if echo "$RESULT" | jq -e '.publish.workspaces["@vitest-agent/plugin"] | select(.success)' >/dev/null; then
                 add_plugin "vitest-agent"
               fi
               ;;
             spencerbeggs/effected)
-              # Dispatches only when @effected/app itself published — the
-              # marketplace plugin and the npm package share a version. A
-              # future additional plugin package from this monorepo gets its
-              # own `if`/`add_plugin` pair here, appending to the same array.
-              if echo "$RESULT" | jq -e '.publishing.packages[] | select(.name == "@effected/app" and .status == "published")' >/dev/null; then
+              # Dispatches on the plugin's own tracking workspace. @effected/app
+              # no longer carries the plugin's version — the plugin tree split in
+              # two and each plugin now has a private tracking package whose only
+              # job is to give changesets something to version.
+              #
+              # @effected/claude-code-plugin is `kind: github-only`: it publishes
+              # to no registry, and its release is a version bump, a git tag and a
+              # GitHub release. `success` is the gate to read — it is true for a
+              # github-only release exactly as it is for a registry publish. Read
+              # `.outcome` only when you need to know WHICH kind of success it was.
+              #
+              # @effected/copilot-plugin is deliberately absent: its marketplace
+              # entry lives in spencerbeggs/bot's .github/plugin/marketplace.json
+              # with an empty ref and is bumped by hand for now. Give it its own
+              # `if`/`add_plugin` pair here once that entry is ready to be
+              # repinned automatically.
+              if echo "$RESULT" | jq -e '.publish.workspaces["@effected/claude-code-plugin"] | select(.success)' >/dev/null; then
                 add_plugin "effected"
               fi
               ;;
@@ -173,7 +189,7 @@ jobs:
               # No associated package — dispatches on any completed release of
               # this repo (a GitHub release was actually created this run),
               # not on a specific package name.
-              if echo "$RESULT" | jq -e '(.publishing.releases | length) > 0' >/dev/null; then
+              if echo "$RESULT" | jq -e 'select(.success) | .totals.releasesCreated > 0' >/dev/null; then
                 add_plugin "design-docs"
               fi
               ;;
@@ -181,7 +197,7 @@ jobs:
               # No associated package — dispatches on any completed release of
               # this repo (a GitHub release was actually created this run),
               # not on a specific package name.
-              if echo "$RESULT" | jq -e '(.publishing.releases | length) > 0' >/dev/null; then
+              if echo "$RESULT" | jq -e 'select(.success) | .totals.releasesCreated > 0' >/dev/null; then
                 add_plugin "api-docs"
               fi
               ;;

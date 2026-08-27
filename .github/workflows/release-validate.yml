@@ -91,7 +91,7 @@ jobs:
           turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Pre-publish validation
-        uses: savvy-web/silk-release-action@v4
+        uses: savvy-web/silk-release-action@v5
         with:
           phase: validation
           app-client-id: ${{ vars.APP_CLIENT_ID }}
