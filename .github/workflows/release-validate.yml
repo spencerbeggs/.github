@@ -82,7 +82,7 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/silk-runtime-action@v1
+        uses: savvy-web/silk-runtime-action@dev
         with:
           turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
           turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
@@ -91,7 +91,7 @@ jobs:
           turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Pre-publish validation
-        uses: savvy-web/silk-release-action@v5
+        uses: savvy-web/silk-release-action@dev
         with:
           phase: validation
           app-client-id: ${{ vars.APP_CLIENT_ID }}
@@ -309,7 +309,7 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/silk-runtime-action@v1
+        uses: savvy-web/silk-runtime-action@dev
         with:
           turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
           turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}

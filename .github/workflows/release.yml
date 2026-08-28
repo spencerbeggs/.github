@@ -75,7 +75,7 @@ jobs:
 
       - name: Detect workflow phase
         id: control
-        uses: savvy-web/silk-router-action@v1
+        uses: savvy-web/silk-router-action@dev
       - name: Set context flags
         id: context
         run: |
@@ -86,7 +86,7 @@ jobs:
     name: Branch Management
     needs: control
     if: needs.control.outputs.phase == 'branch-management' && github.event.action != 'closed'
-    uses: spencerbeggs/.github/.github/workflows/release-branch.yml@main
+    uses: spencerbeggs/.github/.github/workflows/release-branch.yml@dev
     with:
       dry-run: ${{ inputs.dry-run }}
       runner: ${{ inputs.runner }}
@@ -103,7 +103,7 @@ jobs:
       group: silk-validation-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     if: needs.control.outputs.is_pr_event == 'true' && github.event.action != 'closed'
-    uses: spencerbeggs/.github/.github/workflows/release-validate.yml@main
+    uses: spencerbeggs/.github/.github/workflows/release-validate.yml@dev
     with:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
@@ -120,7 +120,7 @@ jobs:
     name: Publish
     needs: control
     if: (needs.control.outputs.phase == 'publishing' || needs.control.outputs.phase == 'close-issues') && github.event.action != 'closed'
-    uses: spencerbeggs/.github/.github/workflows/release-publish.yml@main
+    uses: spencerbeggs/.github/.github/workflows/release-publish.yml@dev
     with:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
