@@ -158,9 +158,18 @@ jobs:
 
           case "$GITHUB_REPOSITORY" in
             spencerbeggs/vitest-agent)
-              # Dispatches only when @vitest-agent/plugin itself published —
-              # the marketplace plugin and the npm package share a version.
-              if echo "$RESULT" | jq -e '.publish.workspaces["@vitest-agent/plugin"] | select(.success)' >/dev/null; then
+              # Dispatches on the plugin's own tracking workspace. @vitest-agent/plugin
+              # no longer carries the plugin's version — the plugin tree split in
+              # two and each plugin now has a private tracking package whose only
+              # job is to give changesets something to version.
+              #
+              # @vitest-agent/claude-code-plugin is `kind: github-only`: it publishes
+              # to no registry, and its release is a version bump, a git tag and a
+              # GitHub release. `success` is the gate to read — it is true for a
+              # github-only release exactly as it is for a registry publish. Read
+              # `.outcome` only when you need to know WHICH kind of success it was.
+              #
+              if echo "$RESULT" | jq -e '.publish.workspaces["@vitest-agent/claude-code-plugin"] | select(.success)' >/dev/null; then
                 add_plugin "vitest-agent"
               fi
               ;;
