@@ -202,6 +202,11 @@ jobs:
                 add_plugin "design-docs"
               fi
               ;;
+            spencerbeggs/bot)
+              if echo "$RESULT" | jq -e '.publish.workspaces["@plugin-bot/claude-code-plugin"] | select(.success)' >/dev/null; then
+                add_plugin "plugin-bot"
+              fi
+              ;;
             spencerbeggs/rspress-plugin-api-extractor)
               # No associated package — dispatches on any completed release of
               # this repo (a GitHub release was actually created this run),
