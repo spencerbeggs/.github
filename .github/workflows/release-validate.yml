@@ -168,6 +168,10 @@ jobs:
           # contributor's test process could read it; later fetches of the base
           # branch run anonymously, which works on public repositories.
           persist-credentials: ${{ !inputs.fork }}
+          # actions/checkout refuses a fork head under pull_request_target
+          # unless told the risk is accepted. It is: this job runs only after
+          # the maintainer approved the fork-review environment deployment.
+          allow-unsafe-pr-checkout: ${{ inputs.fork }}
           submodules: true
 
       # Fail-fast: if check creation fails (GitHub flakiness), the job stops here.
