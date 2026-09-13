@@ -1489,9 +1489,11 @@ jobs:
     needs: [validate]
     runs-on: ${{ inputs.runner }}
     if: always()
+    # No `actions: write` here: a nested job may not request a permission the
+    # top-level caller did not grant, and callers grant none for actions. The
+    # fork-mode cache purge below uses an App token instead.
     permissions:
       checks: write
-      actions: write
     env:
       HAS_APP_KEY: ${{ secrets.APP_PRIVATE_KEY != '' }}
     steps:
@@ -1569,12 +1571,25 @@ jobs:
       # github.ref -- on pull_request_target that is the base branch, which every
       # later internal run restores from. Contributor code ran before that save,
       # so purge everything this ref's scope gained while the run was in flight.
+      - name: Generate GitHub App token for the cache purge
+        id: purge-token
+        if: always() && inputs.fork && env.HAS_APP_KEY == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-actions: write
+
       - name: Purge caches written during a fork run
         if: always() && inputs.fork
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.purge-token.outputs.token }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::No App token with actions:write for the cache purge -- grant the GitHub App the Actions (write) repository permission. Cache entries this fork run saved under ${GITHUB_REF} were NOT removed."
+            exit 1
+          fi
           STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.run_started_at')
           echo "Run started at ${STARTED}; ref ${GITHUB_REF}"
           gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/caches?ref=${GITHUB_REF}&per_page=100" \
