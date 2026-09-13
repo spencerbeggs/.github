@@ -34,6 +34,19 @@ on:
         type: string
         required: false
         default: ""
+      fork-review-environment:
+        description: >-
+          Name of a GitHub Environment that has at least one required reviewer.
+          When set, a pull_request_target run from a fork waits on that
+          environment's approval and then runs the full validation (check runs,
+          Claude review) with this repository's secrets. Empty disables the
+          gated leg. The environment must be created by hand with a required
+          reviewer; the fork-approval job refuses to continue if it is missing
+          or unprotected, because GitHub silently creates an unprotected
+          environment the first time a workflow names one.
+        type: string
+        required: false
+        default: ""
     secrets:
       # Optional so a pull_request run from a fork -- which GitHub never hands
       # repository secrets -- is not rejected before its first step. Branch
@@ -91,7 +104,10 @@ jobs:
   branch-management:
     name: Branch Management
     needs: control
-    if: needs.control.outputs.phase == 'branch-management' && github.event.action != 'closed'
+    # Every phase job excludes pull_request_target. On that event github.ref is
+    # the BASE branch, so the router reads a fork PR as "on main, not a push"
+    # and answers branch-management; only the fork-* jobs below may run there.
+    if: github.event_name != 'pull_request_target' && needs.control.outputs.phase == 'branch-management' && github.event.action != 'closed'
     uses: spencerbeggs/.github/.github/workflows/release-branch.yml@main
     with:
       dry-run: ${{ inputs.dry-run }}
@@ -108,7 +124,7 @@ jobs:
     concurrency:
       group: silk-validation-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
-    if: needs.control.outputs.is_pr_event == 'true' && github.event.action != 'closed'
+    if: github.event_name != 'pull_request_target' && needs.control.outputs.is_pr_event == 'true' && github.event.action != 'closed'
     uses: spencerbeggs/.github/.github/workflows/release-validate.yml@main
     with:
       phase: ${{ needs.control.outputs.phase }}
@@ -125,11 +141,78 @@ jobs:
   publish:
     name: Publish
     needs: control
-    if: (needs.control.outputs.phase == 'publishing' || needs.control.outputs.phase == 'close-issues') && github.event.action != 'closed'
+    if: github.event_name != 'pull_request_target' && (needs.control.outputs.phase == 'publishing' || needs.control.outputs.phase == 'close-issues') && github.event.action != 'closed'
     uses: spencerbeggs/.github/.github/workflows/release-publish.yml@main
     with:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+      runner: ${{ inputs.runner }}
+    secrets: inherit
+
+  # ---------------------------------------------------------------------------
+  # Fork pull requests. A pull_request run from a fork carries no secrets, so
+  # the validation job above degrades to a job-status result. This leg runs on
+  # pull_request_target -- base-repository context, secrets present -- and is
+  # parked behind an environment with required reviewers: nothing below
+  # fork-approval executes until a maintainer has read the diff and approved
+  # the run. Each push is a new run and needs a new approval.
+  # ---------------------------------------------------------------------------
+  fork-approval:
+    name: Fork Approval
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      inputs.fork-review-environment != '' &&
+      github.event.action != 'closed'
+    runs-on: ${{ inputs.runner }}
+    environment: ${{ inputs.fork-review-environment }}
+    permissions:
+      contents: read
+    steps:
+      # GitHub creates an environment with no protection rules the first time
+      # a workflow references it. If that happened here, this job would have
+      # started without anyone approving -- so refuse to hand off unless a
+      # required-reviewers rule is really in place.
+      - name: Verify the environment requires reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ inputs.fork-review-environment }}
+        run: |
+          set -euo pipefail
+          RULES=$(gh api "repos/${GITHUB_REPOSITORY}/environments/${ENVIRONMENT}" --jq '[.protection_rules[]?.type] | join(",")')
+          echo "Protection rules on '${ENVIRONMENT}': ${RULES:-<none>}"
+          case ",${RULES}," in
+            *,required_reviewers,*)
+              echo "Environment '${ENVIRONMENT}' requires reviewers; this run was approved."
+              ;;
+            *)
+              echo "::error::Environment '${ENVIRONMENT}' has no required-reviewers rule. Add at least one required reviewer in Settings > Environments before fork pull requests may run with secrets."
+              exit 1
+              ;;
+          esac
+
+  fork-validation:
+    name: Fork Validation
+    needs: fork-approval
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      inputs.fork-review-environment != '' &&
+      github.event.action != 'closed'
+    concurrency:
+      group: silk-fork-validation-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    uses: spencerbeggs/.github/.github/workflows/release-validate.yml@main
+    with:
+      phase: none
+      fork: true
+      dry-run: ${{ inputs.dry-run }}
+      auto-merge: ${{ inputs.auto-merge }}
+      claude-debug: ${{ inputs.claude-debug }}
+      skip-claude-review: ${{ inputs.skip-claude-review }}
+      claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
+      sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+      on-build: ${{ inputs.on-build }}
       runner: ${{ inputs.runner }}
     secrets: inherit
