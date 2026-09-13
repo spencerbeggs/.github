@@ -51,6 +51,16 @@ on:
         type: string
         required: false
         default: ""
+      fork:
+        description: >-
+          True when this run validates a pull request from a fork after the
+          maintainer approved it (the dispatcher's pull_request_target leg). The
+          contributor's code then executes with secrets, so this mode shrinks
+          what it can reach: no remote turbo cache, an App token limited to
+          contents:read, and no persisted git credential.
+        type: boolean
+        required: false
+        default: false
     secrets:
       # Absent on pull_request runs from forks. Without it the validate job
       # cannot create check runs (GITHUB_TOKEN is read-only there), so it
@@ -135,7 +145,7 @@ jobs:
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          permission-contents: write
+          permission-contents: ${{ inputs.fork && 'read' || 'write' }}
           permission-pull-requests: write
           permission-issues: write
           permission-actions: read
@@ -151,7 +161,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || github.token }}
-          persist-credentials: true
+          # A fork run must not leave the token in .git/config where the
+          # contributor's test process could read it; later fetches of the base
+          # branch run anonymously, which works on public repositories.
+          persist-credentials: ${{ !inputs.fork }}
           submodules: true
 
       # Fail-fast: if check creation fails (GitHub flakiness), the job stops here.
@@ -325,11 +338,14 @@ jobs:
         id: runtime
         uses: savvy-web/silk-runtime-action@v1
         with:
-          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
-          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
-          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
-          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
-          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
+          # Never hand a fork run cache credentials: an approved contributor's
+          # code could otherwise write an artifact that a later build on main
+          # replays. An empty bucket disables the remote cache in the action.
+          turbo-s3-bucket: ${{ !inputs.fork && secrets.TURBO_S3_BUCKET || '' }}
+          turbo-s3-region: ${{ !inputs.fork && secrets.TURBO_S3_REGION || '' }}
+          turbo-s3-endpoint: ${{ !inputs.fork && secrets.TURBO_S3_ENDPOINT || '' }}
+          turbo-s3-access-key-id: ${{ !inputs.fork && secrets.TURBO_S3_ACCESS_KEY_ID || '' }}
+          turbo-s3-secret-access-key: ${{ !inputs.fork && secrets.TURBO_S3_SECRET_ACCESS_KEY || '' }}
 
       - name: Detect package manager
         id: pm
