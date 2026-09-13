@@ -43,7 +43,9 @@ on:
           gated leg. The environment must be created by hand with a required
           reviewer; the fork-approval job refuses to continue if it is missing
           or unprotected, because GitHub silently creates an unprotected
-          environment the first time a workflow names one.
+          environment the first time a workflow names one. Use only with
+          GitHub-hosted runners: a fork run on a self-hosted runner is a
+          persistent compromise of that runner.
         type: string
         required: false
         default: ""
@@ -215,4 +217,10 @@ jobs:
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
       on-build: ${{ inputs.on-build }}
       runner: ${{ inputs.runner }}
-    secrets: inherit
+    # Explicit, not inherit: the job runs the contributor's install and test
+    # code, and everything inherited is reachable from there. Only what the
+    # check runs and the review need crosses this line.
+    secrets:
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      CLAUDE_REVIEW_PAT: ${{ secrets.CLAUDE_REVIEW_PAT }}

@@ -55,9 +55,13 @@ on:
         description: >-
           True when this run validates a pull request from a fork after the
           maintainer approved it (the dispatcher's pull_request_target leg). The
-          contributor's code then executes with secrets, so this mode shrinks
-          what it can reach: no remote turbo cache, an App token limited to
-          contents:read, and no persisted git credential.
+          contributor's code then executes in this job and can reach whatever
+          the job holds -- the App private key, the Claude OAuth token and
+          CLAUDE_REVIEW_PAT are the accepted residual. This mode keeps
+          everything else out: only those three secrets are passed, no turbo
+          or registry credentials, no OIDC token, no remote or embedded turbo
+          cache, no persisted git credential, and every Actions-cache entry
+          saved during the run is purged afterwards.
         type: boolean
         required: false
         default: false
@@ -130,7 +134,6 @@ jobs:
     permissions:
       contents: read
       checks: write
-      id-token: write
 
     steps:
       # A pull_request run from a fork has no secrets, so this step is skipped
@@ -216,8 +219,9 @@ jobs:
       - name: Check if PR only contains version/changelog changes
         if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
         id: check-changes
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          HEAD_REF="${{ github.head_ref }}"
           case "$HEAD_REF" in
             pnpm/config-deps | copilot/* | dependabot/* | changeset-release/*)
               echo "skip-review=true" >> $GITHUB_OUTPUT
@@ -338,6 +342,9 @@ jobs:
         id: runtime
         uses: savvy-web/silk-runtime-action@v1
         with:
+          # Fork mode: no embedded turbo cache either, so no turbo artifact is
+          # written to the Actions cache under the base branch's scope.
+          turbo-cache: ${{ inputs.fork && 'off' || 'auto' }}
           # Never hand a fork run cache credentials: an approved contributor's
           # code could otherwise write an artifact that a later build on main
           # replays. An empty bucket disables the remote cache in the action.
@@ -367,9 +374,10 @@ jobs:
         continue-on-error: true
         env:
           COMMITLINT_SKIP_DCO: "true"
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           set +e
-          ${{ steps.pm.outputs.exec }} commitlint --config lib/configs/commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
+          ${{ steps.pm.outputs.exec }} commitlint --config lib/configs/commitlint.config.ts <<< "$PR_TITLE"
           echo "exit_code=$?" >> $GITHUB_OUTPUT
 
       - name: Update PR Title Check
@@ -788,7 +796,7 @@ jobs:
           {
             echo "## Validation (no check runs)"
             echo
-            echo "This run has no GitHub App token -- pull requests from forks never receive repository secrets -- so results are reported here instead of as individual checks."
+            echo "This pull_request run has no GitHub App token (a fork's pull_request run never receives repository secrets), so results are reported here instead of as individual checks."
             echo
             echo "| Check | Result |"
             echo "|---|---|"
@@ -914,7 +922,7 @@ jobs:
           use_sticky_comment: true
           claude_args: |
             --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github__get_job_logs,mcp__github__submit_pending_pull_request_review,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/gh-pr-review.sh:*),Read,Glob,Grep,Write(/tmp/**),Skill"
-            --disallowedTools "Agent,Task"
+            --disallowedTools "Agent,Task,Bash(gh gist:*),Bash(gh api:*),Bash(gh auth:*)"
             --model "claude-opus-4-8"
           prompt: |
             # Pull Request Context
@@ -1483,6 +1491,7 @@ jobs:
     if: always()
     permissions:
       checks: write
+      actions: write
     env:
       HAS_APP_KEY: ${{ secrets.APP_PRIVATE_KEY != '' }}
     steps:
@@ -1554,3 +1563,28 @@ jobs:
             }
 
             console.log('All in-progress checks resolved as neutral');
+
+      # The runtime action's post-step saves node_modules, the package store and
+      # .turbo to the Actions cache at the END of the validate job, scoped to
+      # github.ref -- on pull_request_target that is the base branch, which every
+      # later internal run restores from. Contributor code ran before that save,
+      # so purge everything this ref's scope gained while the run was in flight.
+      - name: Purge caches written during a fork run
+        if: always() && inputs.fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STARTED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.run_started_at')
+          echo "Run started at ${STARTED}; ref ${GITHUB_REF}"
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/caches?ref=${GITHUB_REF}&per_page=100" \
+            --jq ".actions_caches[] | select(.created_at >= \"${STARTED}\") | \"\(.id)\t\(.key)\"" \
+            > "$RUNNER_TEMP/fork-caches.tsv" || true
+          if [ ! -s "$RUNNER_TEMP/fork-caches.tsv" ]; then
+            echo "No cache entries were created in this ref's scope during the run."
+            exit 0
+          fi
+          while IFS=$'\t' read -r id key; do
+            echo "Deleting cache ${id} (${key})"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/caches/${id}"
+          done < "$RUNNER_TEMP/fork-caches.tsv"
