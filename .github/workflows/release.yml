@@ -35,10 +35,16 @@ on:
         required: false
         default: ""
     secrets:
+      # Optional so a pull_request run from a fork -- which GitHub never hands
+      # repository secrets -- is not rejected before its first step. Branch
+      # management and publishing still need both; they only run on pushes to
+      # main, where the secrets are always present. Validation degrades without
+      # them: it checks out with GITHUB_TOKEN and reports through the job
+      # status instead of per-check runs.
       APP_ID:
-        required: true
+        required: false
       APP_PRIVATE_KEY:
-        required: true
+        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         required: false
       CLAUDE_REVIEW_PAT:

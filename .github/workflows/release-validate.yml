@@ -52,8 +52,11 @@ on:
         required: false
         default: ""
     secrets:
+      # Absent on pull_request runs from forks. Without it the validate job
+      # cannot create check runs (GITHUB_TOKEN is read-only there), so it
+      # reports every result through its own job status instead.
       APP_PRIVATE_KEY:
-        required: true
+        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         required: false
       CLAUDE_REVIEW_PAT:
@@ -112,14 +115,22 @@ jobs:
       TURBO_RUN_SUMMARY: "1"
       CHECK_RUN_ID: ""
       CLAUDE_COMMENT_ID: "0"
+      # The secrets context is not available in a step-level `if`, only here.
+      HAS_APP_KEY: ${{ secrets.APP_PRIVATE_KEY != '' }}
     permissions:
       contents: read
       checks: write
       id-token: write
 
     steps:
+      # A pull_request run from a fork has no secrets, so this step is skipped
+      # and every step that needs the token is gated on its outcome. What
+      # remains is a degraded but honest mode: checkout on GITHUB_TOKEN, no
+      # per-check runs, no Claude review, and the job status carrying the
+      # validation result (see "Fail on validation errors without check runs").
       - name: Generate GitHub App token
         id: app-token
+        if: env.HAS_APP_KEY == 'true'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
@@ -131,6 +142,7 @@ jobs:
           permission-checks: write
 
       - name: Wait for token propagation
+        if: steps.app-token.outcome == 'success'
         run: sleep 5
 
       - name: Checkout repository
@@ -138,7 +150,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
           persist-credentials: true
           submodules: true
 
@@ -148,6 +160,7 @@ jobs:
       # resolves any partially-created checks as neutral.
       - name: Create validation checks
         id: create-checks
+        if: steps.app-token.outcome == 'success'
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -264,6 +277,7 @@ jobs:
 
       - name: Create Claude Review check
         id: create-check
+        if: steps.app-token.outcome == 'success'
         uses: actions/github-script@v9
         env:
           SKIP_REASON: ${{ steps.check-changes.outputs.skip-reason }}
@@ -738,8 +752,61 @@ jobs:
               ...result
             });
 
+      # Every validation step above is continue-on-error and reports through its
+      # check run, so the job itself stays green whatever they found. When no
+      # check runs exist (a fork PR, where the App token step was skipped) the
+      # job status is the only signal left, so fold the results into it here.
+      - name: Fail on validation errors without check runs
+        if: steps.create-checks.outcome == 'skipped'
+        env:
+          PR_TITLE_EXIT: ${{ steps.pr-title.outputs.exit_code }}
+          COMMITLINT_EXIT: ${{ steps.commitlint.outputs.exit_code }}
+          LINT_EXIT: ${{ steps.lint.outputs.exit_code }}
+          MARKDOWNLINT_EXIT: ${{ steps.markdownlint.outputs.exit_code }}
+          TEST_EXIT: ${{ steps.test.outputs.exit_code }}
+          BATS_OUTCOME: ${{ steps.bats.outcome }}
+          BATS_EXIT: ${{ steps.bats.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          FAILED=0
+          {
+            echo "## Validation (no check runs)"
+            echo
+            echo "This run has no GitHub App token -- pull requests from forks never receive repository secrets -- so results are reported here instead of as individual checks."
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          row() {
+            local name="$1" code="$2" result
+            if [ -z "$code" ]; then
+              result="skipped"
+            elif [ "$code" = "0" ]; then
+              result="pass"
+            else
+              result="**fail** (exit $code)"
+              FAILED=1
+            fi
+            echo "| $name | $result |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$name: $result"
+          }
+          row "PR Title Validation" "$PR_TITLE_EXIT"
+          row "Conventional Commits" "$COMMITLINT_EXIT"
+          row "Code Quality" "$LINT_EXIT"
+          row "Markdown" "$MARKDOWNLINT_EXIT"
+          row "Tests" "$TEST_EXIT"
+          if [ "$BATS_OUTCOME" = "skipped" ]; then
+            row "Shell Tests" ""
+          else
+            row "Shell Tests" "$BATS_EXIT"
+          fi
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::One or more validation steps failed; see the step log and job summary."
+            exit 1
+          fi
+
       - name: Update check - Starting review
-        if: steps.create-check.outputs.should-skip != 'true'
+        if: steps.create-check.outcome == 'success' && steps.create-check.outputs.should-skip != 'true'
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -773,7 +840,7 @@ jobs:
             });
 
       - name: Find existing Claude review comment
-        if: steps.create-check.outputs.should-skip != 'true'
+        if: steps.create-check.outcome == 'success' && steps.create-check.outputs.should-skip != 'true'
         id: find-comment
         uses: actions/github-script@v9
         with:
@@ -810,7 +877,7 @@ jobs:
             }
 
       - name: Run Claude Code Review
-        if: steps.create-check.outputs.should-skip != 'true'
+        if: steps.create-check.outcome == 'success' && steps.create-check.outputs.should-skip != 'true'
         id: claude-review-action
         uses: anthropics/claude-code-action@v1
         env:
@@ -1285,7 +1352,7 @@ jobs:
             commands with literal arguments, and run them one at a time.
 
       - name: Verify a review was actually posted
-        if: steps.create-check.outputs.should-skip != 'true' && steps.claude-review-action.outcome == 'success'
+        if: steps.create-check.outcome == 'success' && steps.create-check.outputs.should-skip != 'true' && steps.claude-review-action.outcome == 'success'
         id: verify-review
         uses: actions/github-script@v9
         with:
@@ -1400,16 +1467,21 @@ jobs:
     if: always()
     permissions:
       checks: write
+    env:
+      HAS_APP_KEY: ${{ secrets.APP_PRIVATE_KEY != '' }}
     steps:
       - name: Generate GitHub App token
         id: app-token
+        if: env.HAS_APP_KEY == 'true'
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-checks: write
 
+      # Nothing to resolve on a fork PR: without the token no checks were created.
       - name: Cleanup in-progress checks
+        if: steps.app-token.outcome == 'success'
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
