@@ -36,11 +36,17 @@ on:
       claude-review-plugin-marketplaces:
         description: Newline-separated Claude Code plugin marketplace git URLs to install before review. Empty string disables.
         type: string
-        default: "https://github.com/spencerbeggs/bot.git"
+        default: |
+          https://github.com/spencerbeggs/bot.git
+          https://github.com/savvy-web/systems.git
       claude-review-plugins:
         description: Newline-separated Claude Code plugins (name@marketplace) to install before review. Empty string disables.
         type: string
-        default: "design-docs@spencerbeggs"
+        default: |
+          okfit@spencerbeggs
+          effected@spencerbeggs
+          silk@savvy-web-systems
+          vitest-agent@spencerbeggs
       sbom-config:
         description: SBOM metadata configuration (JSON) for NTIA-compliant SBOM generation
         type: string
