@@ -141,84 +141,68 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Route this repo's release to the Claude Code marketplace plugin(s)
-          # (if any) it corresponds to in spencerbeggs/bot's
-          # .claude-plugin/marketplace.json, and dispatch them all as one
-          # `json` patch array (`{"plugins":[{name,sha},...]}`) rather than the
-          # single-plugin manual path — a monorepo release (e.g. effected)
-          # can publish more than one plugin package in a single run, and each
-          # match below appends its own patch to the same array. plugin-bot is
-          # manually incremented and is never dispatched here.
+          # Route this repo's release to the marketplace plugin entries (if
+          # any) it corresponds to in spencerbeggs/bot, and dispatch them all
+          # as one `json` patch array for
+          # spencerbeggs/ai-plugin-marketplace-manager@v2
+          # (`{"plugins":[{name,marketplace,sha},...]}`, see
+          # schemas/2.0/input.json). `marketplace` picks the manifest:
+          # `claude-code` is .claude-plugin/marketplace.json, `copilot` is
+          # .github/plugin/marketplace.json. One release can repin several
+          # entries across both manifests: a monorepo (e.g. effected) versions
+          # a Claude Code and a Copilot plugin as separate tracking workspaces.
           release_sha=$(git rev-parse HEAD)
           plugins_json="[]"
 
           add_plugin() {
-            plugins_json=$(jq -c --arg name "$1" --arg sha "$release_sha" '. + [{name: $name, sha: $sha}]' <<<"$plugins_json")
+            plugins_json=$(jq -c --arg name "$1" --arg marketplace "$2" --arg sha "$release_sha" \
+              '. + [{name: $name, marketplace: $marketplace, sha: $sha}]' <<<"$plugins_json")
+          }
+
+          # Repins <name> in <marketplace> when the tracking workspace
+          # <workspace> released this run. Each plugin has a private tracking
+          # package whose only job is to give changesets something to version;
+          # it is `kind: github-only`, so it publishes to no registry and its
+          # release is a version bump, a git tag and a GitHub release.
+          # `success` is the gate to read — it is true for a github-only
+          # release exactly as it is for a registry publish. Read `.outcome`
+          # only when you need to know WHICH kind of success it was. See
+          # schemas/6.0/output.json, PublishOutput.publish.workspaces.
+          add_if_released() {
+            if jq -e --arg ws "$1" '.publish.workspaces[$ws] | select(.success)' >/dev/null <<<"$RESULT"; then
+              add_plugin "$2" "$3"
+            fi
+          }
+
+          # For repos with no tracking workspace: repins <name> in
+          # <marketplace> on any completed release of this repo (a GitHub
+          # release was actually created this run).
+          add_if_any_release() {
+            if jq -e 'select(.success) | .totals.releasesCreated > 0' >/dev/null <<<"$RESULT"; then
+              add_plugin "$1" "$2"
+            fi
           }
 
           case "$GITHUB_REPOSITORY" in
             spencerbeggs/vitest-agent)
-              # Dispatches on the plugin's own tracking workspace. @vitest-agent/plugin
-              # no longer carries the plugin's version — the plugin tree split in
-              # two and each plugin now has a private tracking package whose only
-              # job is to give changesets something to version.
-              #
-              # @vitest-agent/claude-code-plugin is `kind: github-only`: it publishes
-              # to no registry, and its release is a version bump, a git tag and a
-              # GitHub release. `success` is the gate to read — it is true for a
-              # github-only release exactly as it is for a registry publish. Read
-              # `.outcome` only when you need to know WHICH kind of success it was.
-              #
-              if echo "$RESULT" | jq -e '.publish.workspaces["@vitest-agent/claude-code-plugin"] | select(.success)' >/dev/null; then
-                add_plugin "vitest-agent"
-              fi
+              add_if_released "@vitest-agent/claude-code-plugin" "vitest-agent" "claude-code"
               ;;
             spencerbeggs/effected)
-              # Dispatches on the plugin's own tracking workspace. @effected/app
-              # no longer carries the plugin's version — the plugin tree split in
-              # two and each plugin now has a private tracking package whose only
-              # job is to give changesets something to version.
-              #
-              # @effected/claude-code-plugin is `kind: github-only`: it publishes
-              # to no registry, and its release is a version bump, a git tag and a
-              # GitHub release. `success` is the gate to read — it is true for a
-              # github-only release exactly as it is for a registry publish. Read
-              # `.outcome` only when you need to know WHICH kind of success it was.
-              #
-              # @effected/copilot-plugin is deliberately absent: its marketplace
-              # entry lives in spencerbeggs/bot's .github/plugin/marketplace.json
-              # with an empty ref and is bumped by hand for now. Give it its own
-              # `if`/`add_plugin` pair here once that entry is ready to be
-              # repinned automatically.
-              if echo "$RESULT" | jq -e '.publish.workspaces["@effected/claude-code-plugin"] | select(.success)' >/dev/null; then
-                add_plugin "effected"
-              fi
+              add_if_released "@effected/claude-code-plugin" "effected" "claude-code"
+              add_if_released "@effected/copilot-plugin" "effected" "copilot"
               ;;
             spencerbeggs/design-docs-plugin)
-              # No associated package — dispatches on any completed release of
-              # this repo (a GitHub release was actually created this run),
-              # not on a specific package name.
-              if echo "$RESULT" | jq -e 'select(.success) | .totals.releasesCreated > 0' >/dev/null; then
-                add_plugin "design-docs"
-              fi
+              add_if_any_release "design-docs" "claude-code"
               ;;
             spencerbeggs/bot)
-              if echo "$RESULT" | jq -e '.publish.workspaces["@plugin-bot/claude-code-plugin"] | select(.success)' >/dev/null; then
-                add_plugin "plugin-bot"
-              fi
+              add_if_released "@plugin-bot/claude-code-plugin" "plugin-bot" "claude-code"
+              add_if_released "@plugin-bot/copilot-plugin" "plugin-bot" "copilot"
               ;;
             spencerbeggs/okfit)
-              if echo "$RESULT" | jq -e '.publish.workspaces["@okfit/claude-code-plugin"] | select(.success)' >/dev/null; then
-                add_plugin "okfit"
-              fi
+              add_if_released "@okfit/claude-code-plugin" "okfit" "claude-code"
               ;;
             spencerbeggs/rspress-plugin-api-extractor)
-              # No associated package — dispatches on any completed release of
-              # this repo (a GitHub release was actually created this run),
-              # not on a specific package name.
-              if echo "$RESULT" | jq -e 'select(.success) | .totals.releasesCreated > 0' >/dev/null; then
-                add_plugin "api-docs"
-              fi
+              add_if_any_release "api-docs" "claude-code"
               ;;
           esac
 
@@ -228,7 +212,7 @@ jobs:
           fi
 
           json_payload=$(jq -c --argjson plugins "$plugins_json" -n '{plugins: $plugins}')
-          echo "Dispatching repin for: $(echo "$plugins_json" | jq -r '[.[].name] | join(", ")') at $release_sha"
+          echo "Dispatching repin for: $(echo "$plugins_json" | jq -r '[.[] | "\(.name) (\(.marketplace))"] | join(", ")') at $release_sha"
 
           gh api repos/spencerbeggs/bot/dispatches \
             -f event_type=plugin-release \
