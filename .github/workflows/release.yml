@@ -175,7 +175,8 @@ jobs:
     name: Snapshot
     if: ${{ inputs.snapshot && github.event_name == 'workflow_dispatch' }}
     # Its own group, never cancelled: cancelling mid-publish would leave a
-    # partial set under the tag. A second snapshot dispatch queues.
+    # partial set under the tag. A later dispatch waits for the running
+    # snapshot; GitHub keeps only the newest pending one.
     concurrency:
       group: snapshot-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: false
