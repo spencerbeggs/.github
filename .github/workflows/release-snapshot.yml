@@ -1,0 +1,78 @@
+name: Release Snapshot
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
+      snapshot-tag:
+        description: Dist-tag (and prerelease prefix) for the snapshot. Never latest.
+        type: string
+        required: true
+      dry-run:
+        description: Version, build and pack, but publish nothing
+        type: boolean
+        default: false
+    secrets:
+      APP_PRIVATE_KEY:
+        required: false
+      CUSTOM_REGISTRIES:
+        description: |
+          Custom registry authentication (one per line).
+          Format: https://registry.example.com/_authToken=TOKEN
+        required: false
+      NPM_TOKEN:
+        description: |
+          npm token. OIDC trusted publishing is tried first; the token is the
+          fallback, and it also lets the never-published check read private
+          packages (npm answers 404 to an anonymous read of one).
+        required: false
+
+jobs:
+  snapshot:
+    name: Publish Snapshot
+    runs-on: ${{ inputs.runner }}
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+    # No contents: write. A snapshot never commits, pushes, tags or releases.
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup runtime
+        uses: savvy-web/silk-runtime-action@v1
+        with:
+          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
+          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
+          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
+          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
+          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
+          install-deps: true
+          ignore-scripts: true
+
+      - name: Publish snapshot
+        id: release
+        # Pinned like release-publish.yml's release step. The snapshot phase is
+        # reachable through this ref only once silk-release-action's dev branch
+        # (and, after the dev -> main promotion, its release tag) carries it.
+        uses: savvy-web/silk-release-action@v5
+        with:
+          phase: snapshot
+          snapshot-tag: ${{ inputs.snapshot-tag }}
+          app-client-id: ${{ vars.APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
+          dry-run: ${{ inputs.dry-run }}
