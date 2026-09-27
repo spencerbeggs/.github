@@ -51,7 +51,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup runtime
-        uses: savvy-web/silk-runtime-action@v1
+        uses: savvy-web/silk-runtime-action@dev
         with:
           turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
           turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
@@ -66,7 +66,7 @@ jobs:
         # Pinned like release-publish.yml's release step. The snapshot phase is
         # reachable through this ref only once silk-release-action's dev branch
         # (and, after the dev -> main promotion, its release tag) carries it.
-        uses: savvy-web/silk-release-action@v5
+        uses: savvy-web/silk-release-action@dev
         with:
           phase: snapshot
           snapshot-tag: ${{ inputs.snapshot-tag }}
