@@ -48,7 +48,7 @@ jobs:
           persist-credentials: true
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/silk-runtime-action@v1
+        uses: savvy-web/silk-runtime-action@dev
         with:
           install-deps: true
           ignore-scripts: true
@@ -59,7 +59,7 @@ jobs:
           turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Run release
-        uses: savvy-web/silk-release-action@v5
+        uses: savvy-web/silk-release-action@dev
         with:
           phase: branch-management
           app-client-id: ${{ vars.APP_CLIENT_ID }}
