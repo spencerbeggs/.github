@@ -204,6 +204,10 @@ jobs:
             spencerbeggs/rspress-plugin-api-extractor)
               add_if_any_release "api-docs" "claude-code"
               ;;
+            spencerbeggs/pluginfinity)
+              add_if_released "@pluginfinity/ai-plugins" "pluginfinity" "claude-code"
+              add_if_released "@pluginfinity/ai-plugins" "pluginfinity" "copilot"
+              ;;
           esac
 
           if [ "$plugins_json" = "[]" ]; then
