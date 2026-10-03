@@ -188,8 +188,8 @@ jobs:
               add_if_released "@vitest-agent/claude-code-plugin" "vitest-agent" "claude-code"
               ;;
             spencerbeggs/effected)
-              add_if_released "@effected/claude-code-plugin" "effected" "claude-code"
-              add_if_released "@effected/copilot-plugin" "effected" "copilot"
+              add_if_released "@effected/ai-plugin" "effected" "claude-code"
+              add_if_released "@effected/ai-plugin" "effected" "copilot"
               ;;
             spencerbeggs/design-docs-plugin)
               add_if_any_release "design-docs" "claude-code"
