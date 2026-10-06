@@ -199,7 +199,8 @@ jobs:
               add_if_released "@plugin-bot/copilot-plugin" "plugin-bot" "copilot"
               ;;
             spencerbeggs/okfit)
-              add_if_released "@okfit/claude-code-plugin" "okfit" "claude-code"
+              add_if_released "@okfit/ai-plugins" "okfit" "claude-code"
+              add_if_released "@okfit/ai-plugins" "okfit" "copilot"
               ;;
             spencerbeggs/rspress-plugin-api-extractor)
               add_if_any_release "api-docs" "claude-code"
