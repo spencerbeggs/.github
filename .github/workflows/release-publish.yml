@@ -68,7 +68,6 @@ jobs:
           turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
           turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
           install-deps: true
-          ignore-scripts: true
 
       - name: Run release
         id: release
@@ -202,8 +201,9 @@ jobs:
               add_if_released "@okfit/ai-plugins" "okfit" "claude-code"
               add_if_released "@okfit/ai-plugins" "okfit" "copilot"
               ;;
-            spencerbeggs/rspress-plugin-api-extractor)
+            spencerbeggs/tsdoctor)
               add_if_any_release "api-docs" "claude-code"
+              add_if_any_release "api-docs" "copilot"
               ;;
             spencerbeggs/pluginfinity)
               add_if_released "@pluginfinity/ai-plugins" "pluginfinity" "claude-code"
