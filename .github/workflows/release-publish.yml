@@ -184,7 +184,8 @@ jobs:
 
           case "$GITHUB_REPOSITORY" in
             spencerbeggs/vitest-agent)
-              add_if_released "@vitest-agent/claude-code-plugin" "vitest-agent" "claude-code"
+              add_if_released "@vitest-agent/ai-plugins" "vitest-agent" "claude-code"
+              add_if_released "@vitest-agent/ai-plugins" "vitest-agent" "copilot"
               ;;
             spencerbeggs/effected)
               add_if_released "@effected/ai-plugin" "effected" "claude-code"
