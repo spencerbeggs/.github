@@ -105,18 +105,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Package names actually published this run, from the structured
-          # `result` output. A workspace may publish several packages, under
-          # more than one name, to more than one registry, so this flattens the
-          # workspace map and dedupes. `outcome == "published"` means bytes were
-          # uploaded — it deliberately excludes `recovered` (already on the
-          # registry at an identical digest), which is a success but not a new
-          # publication. See schemas/5.0.0/silk-release-action-5.0.0.json,
-          # PublishOutput.publish.workspaces[].packages[].
-          packages=$(echo "$RESULT" | jq -r '[.publish.workspaces[].packages[] | select(.outcome == "published") | .name] | unique | join(",")')
+          # Package names newly published to the public npm registry this run,
+          # from the structured `result` output. The router re-runs the update
+          # action on held dependency PRs, which resolve from npm, so only an
+          # npm publish can unblock them. A workspace may publish several
+          # packages, under more than one name, to more than one registry, so
+          # this flattens the workspace map and dedupes. Excluded:
+          #   - `github-only` workspaces (tag + GitHub release, no registry;
+          #     their `packages` array is always empty);
+          #   - `outcome: recovered` (already on the registry at an identical
+          #     digest — a success, but not a new publication);
+          #   - any registry whose `type` is not `npm` (`github-packages`,
+          #     `jsr`, `custom`).
+          # See schemas/6.0/output.json, PublishedPackage.
+          packages=$(echo "$RESULT" | jq -r '[.publish.workspaces[].packages[] | select(.outcome == "published" and .registry.type == "npm") | .name] | unique | join(",")')
 
           if [ -z "$packages" ]; then
-            echo "No packages published this run; skipping router notification."
+            echo "No packages published to npm this run; skipping router notification."
             exit 0
           fi
 
