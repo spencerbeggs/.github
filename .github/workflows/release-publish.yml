@@ -193,11 +193,8 @@ jobs:
               add_if_released "@vitest-agent/ai-plugins" "vitest-agent" "copilot"
               ;;
             spencerbeggs/effected)
-              add_if_released "@effected/ai-plugin" "effected" "claude-code"
-              add_if_released "@effected/ai-plugin" "effected" "copilot"
-              ;;
-            spencerbeggs/design-docs-plugin)
-              add_if_any_release "design-docs" "claude-code"
+              add_if_released "@effected/ai-plugins" "effected" "claude-code"
+              add_if_released "@effected/ai-plugins" "effected" "copilot"
               ;;
             spencerbeggs/bot)
               add_if_released "@plugin-bot/claude-code-plugin" "plugin-bot" "claude-code"
@@ -208,8 +205,8 @@ jobs:
               add_if_released "@okfit/ai-plugins" "okfit" "copilot"
               ;;
             spencerbeggs/tsdoctor)
-              add_if_any_release "api-docs" "claude-code"
-              add_if_any_release "api-docs" "copilot"
+              add_if_released "@tsdoctor/ai-plugins" "api-docs" "claude-code"
+              add_if_released "@tsdoctor/ai-plugins" "api-docs" "copilot"
               ;;
             spencerbeggs/pluginfinity)
               add_if_released "@pluginfinity/ai-plugins" "pluginfinity" "claude-code"
