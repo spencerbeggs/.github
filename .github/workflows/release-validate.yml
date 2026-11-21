@@ -531,6 +531,29 @@ jobs:
               }
             });
 
+      # Vitest 5's fs module cache persists transformed modules between runs.
+      # Its default home is node_modules/.vitest-cache, which rides along in
+      # silk-runtime-action's node_modules archive but freezes there: an exact
+      # hit skips the save, so it never learns modules added after the first
+      # run on that lockfile. It lives in .cache/vitest instead (gitignored on
+      # our repos, beside .cache/effected) under its own rotating key: every
+      # run saves a new entry, restored by the newest one for the same OS and
+      # lockfile. Vitest drops the whole cache when the lockfile changes, so an
+      # older lockfile's entry is never a useful fallback. A repository without
+      # Vitest ignores the variable and saves nothing.
+      - name: Vitest module cache key
+        id: vitest-cache
+        run: |
+          echo "prefix=vitest-fs-${RUNNER_OS}-${{ hashFiles('pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'bun.lock') }}-" >> "$GITHUB_OUTPUT"
+          echo "path=${GITHUB_WORKSPACE}/.cache/vitest" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Vitest module cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.vitest-cache.outputs.path }}
+          key: ${{ steps.vitest-cache.outputs.prefix }}${{ github.run_id }}
+          restore-keys: ${{ steps.vitest-cache.outputs.prefix }}
+
       # `$GITHUB_STEP_SUMMARY` is one append-only file shared by every step in
       # the job, so "what did the test run write" is a byte range, not a file
       # of its own. Record the length before the run and slice off whatever was
@@ -545,6 +568,8 @@ jobs:
       - name: Run Tests
         id: test
         continue-on-error: true
+        env:
+          VITEST_FS_MODULE_CACHE_PATH: ${{ steps.vitest-cache.outputs.path }}
         run: |
           set +e
           SUMMARY_BEFORE=0
@@ -559,6 +584,38 @@ jobs:
             tail -c "+$((SUMMARY_BEFORE + 1))" "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/test-summary.md"
           fi
           echo "Captured $(wc -c < "$RUNNER_TEMP/test-summary.md" | tr -d ' ') byte(s) of job summary from the test run"
+
+      # Content-hashed entries keep a stale cache correct, only slower, but the
+      # manifest only grows within one lockfile's lifetime: past the cap the
+      # cache is dropped and the next run on that lockfile starts cold. A fork
+      # run never saves, so a contributor's code cannot seed a cache that a
+      # later run on the base branch restores.
+      - name: Cap Vitest module cache
+        id: vitest-cache-cap
+        if: always() && !inputs.fork
+        env:
+          CACHE_DIR: ${{ steps.vitest-cache.outputs.path }}
+          CAP_MB: "256"
+        run: |
+          if [ ! -d "$CACHE_DIR" ]; then
+            echo "save=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          size=$(du -sm "$CACHE_DIR" | cut -f1)
+          if [ "$size" -gt "$CAP_MB" ]; then
+            echo "Vitest module cache is ${size} MB (cap ${CAP_MB} MB); not saving it"
+            echo "save=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Vitest module cache is ${size} MB"
+            echo "save=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save Vitest module cache
+        if: always() && steps.vitest-cache-cap.outputs.save == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.vitest-cache.outputs.path }}
+          key: ${{ steps.vitest-cache.outputs.prefix }}${{ github.run_id }}
 
       - name: Update Test Check
         if: always() && steps.create-checks.outcome == 'success'
