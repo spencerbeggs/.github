@@ -722,15 +722,18 @@ jobs:
           # file's setup_file state and test ordering behave exactly as they do
           # serially. `bats --jobs` needs GNU parallel (moreutils ships a
           # different `parallel` that bats cannot drive), which the macOS images
-          # lack, so it is installed when missing; if that fails, or the runner
-          # has one CPU (--no-parallelize-within-files aborts below --jobs 2),
-          # the suites run serially as before. The JUnit report is unaffected:
+          # lack, so it is installed when missing; if that fails, the suites run
+          # serially as before. The job count is twice the CPU count: shell tests
+          # spend most of their time waiting on the processes they spawn, so a
+          # job per CPU leaves the runner idle. It is never below 2, the floor
+          # --no-parallelize-within-files requires. The JUnit report is unaffected:
           # bats writes it from the suite's combined, order-preserved stream.
           # parallel's one-time citation notice goes to stderr, which bats
           # merges into that stream, so it is acknowledged up front.
           JOBS_FLAGS=()
           NCPU=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
-          if [ "$NCPU" -gt 1 ]; then
+          JOBS=$((NCPU * 2))
+          if [ "$JOBS" -gt 1 ]; then
             if ! parallel --version 2>/dev/null | grep -q 'GNU parallel'; then
               case "$RUNNER_OS" in
                 macOS)
@@ -742,8 +745,8 @@ jobs:
             fi
             if parallel --version 2>/dev/null | grep -q 'GNU parallel'; then
               mkdir -p "$HOME/.parallel" && touch "$HOME/.parallel/will-cite"
-              JOBS_FLAGS=(--jobs "$NCPU" --no-parallelize-within-files)
-              echo "Running ${#FILES[@]} BATS file(s) in parallel with --jobs $NCPU"
+              JOBS_FLAGS=(--jobs "$JOBS" --no-parallelize-within-files)
+              echo "Running ${#FILES[@]} BATS file(s) in parallel with --jobs $JOBS ($NCPU CPUs)"
             else
               echo "GNU parallel is unavailable; running BATS serially"
             fi
