@@ -538,7 +538,9 @@ jobs:
       # run on that lockfile. It lives in .cache/vitest instead (gitignored on
       # our repos, beside .cache/effected) under its own rotating key: every
       # run saves a new entry, restored by the newest one for the same OS and
-      # lockfile. Vitest drops the whole cache when the lockfile changes, so an
+      # lockfile. The key carries the run attempt as well as the run id, since a
+      # re-run keeps its run id and would otherwise find its key taken and not
+      # save. Vitest drops the whole cache when the lockfile changes, so an
       # older lockfile's entry is never a useful fallback. A repository without
       # Vitest ignores the variable and saves nothing.
       - name: Vitest module cache key
@@ -551,7 +553,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ steps.vitest-cache.outputs.path }}
-          key: ${{ steps.vitest-cache.outputs.prefix }}${{ github.run_id }}
+          key: ${{ steps.vitest-cache.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: ${{ steps.vitest-cache.outputs.prefix }}
 
       # `$GITHUB_STEP_SUMMARY` is one append-only file shared by every step in
@@ -615,7 +617,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.vitest-cache.outputs.path }}
-          key: ${{ steps.vitest-cache.outputs.prefix }}${{ github.run_id }}
+          key: ${{ steps.vitest-cache.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Update Test Check
         if: always() && steps.create-checks.outcome == 'success'
