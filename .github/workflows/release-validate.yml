@@ -718,10 +718,41 @@ jobs:
           while IFS= read -r -d '' f || [ -n "$f" ]; do
             FILES+=("$f")
           done < "$RUNNER_TEMP/bats-files.z"
+          # Files run in parallel, the tests inside each file in order, so a
+          # file's setup_file state and test ordering behave exactly as they do
+          # serially. `bats --jobs` needs GNU parallel (moreutils ships a
+          # different `parallel` that bats cannot drive), which the macOS images
+          # lack, so it is installed when missing; if that fails, or the runner
+          # has one CPU (--no-parallelize-within-files aborts below --jobs 2),
+          # the suites run serially as before. The JUnit report is unaffected:
+          # bats writes it from the suite's combined, order-preserved stream.
+          # parallel's one-time citation notice goes to stderr, which bats
+          # merges into that stream, so it is acknowledged up front.
+          JOBS_FLAGS=()
+          NCPU=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+          if [ "$NCPU" -gt 1 ]; then
+            if ! parallel --version 2>/dev/null | grep -q 'GNU parallel'; then
+              case "$RUNNER_OS" in
+                macOS)
+                  HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install parallel >/dev/null 2>&1 ;;
+                Linux)
+                  sudo apt-get install -y -qq parallel >/dev/null 2>&1 \
+                    || { sudo apt-get update -qq >/dev/null 2>&1 && sudo apt-get install -y -qq parallel >/dev/null 2>&1; } ;;
+              esac
+            fi
+            if parallel --version 2>/dev/null | grep -q 'GNU parallel'; then
+              mkdir -p "$HOME/.parallel" && touch "$HOME/.parallel/will-cite"
+              JOBS_FLAGS=(--jobs "$NCPU" --no-parallelize-within-files)
+              echo "Running ${#FILES[@]} BATS file(s) in parallel with --jobs $NCPU"
+            else
+              echo "GNU parallel is unavailable; running BATS serially"
+            fi
+          fi
           # --report-formatter, not --formatter: this writes report.xml for the
           # annotations while leaving human-readable TAP on the job log. Plain
           # `--formatter junit` would put the XML on stdout and nothing else.
-          bats --report-formatter junit --output "$RUNNER_TEMP/bats-report" "${FILES[@]}"
+          # The `+` expansion keeps an empty array safe on macOS's bash 3.2.
+          bats ${JOBS_FLAGS[@]+"${JOBS_FLAGS[@]}"} --report-formatter junit --output "$RUNNER_TEMP/bats-report" "${FILES[@]}"
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Update Shell Tests Check
