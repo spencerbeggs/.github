@@ -47,7 +47,7 @@ jobs:
       TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: write
-      id-token: write
+      id-token: write # signs the job in to the hosted turbo cache
       packages: write
       attestations: write
       artifact-metadata: write
@@ -60,13 +60,9 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/silk-runtime-action@v1
+        uses: savvy-web/silk-runtime-action@v2
         with:
-          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
-          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
-          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
-          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
-          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
+          turbo-api: https://cache.savvyweb.systems
           install-deps: true
 
       - name: Run release
