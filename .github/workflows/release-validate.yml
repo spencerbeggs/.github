@@ -106,7 +106,7 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/silk-runtime-action@v2
+        uses: savvy-web/silk-runtime-action@dev
         with:
           # No turbo-api here. This file also runs as the fork-validation leg
           # under pull_request_target, where an id-token grant would let a
@@ -115,7 +115,7 @@ jobs:
           turbo-cache: auto
 
       - name: Pre-publish validation
-        uses: savvy-web/silk-release-action@v5
+        uses: savvy-web/silk-release-action@dev
         with:
           phase: validation
           app-client-id: ${{ vars.APP_CLIENT_ID }}
@@ -352,7 +352,7 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/silk-runtime-action@v2
+        uses: savvy-web/silk-runtime-action@dev
         with:
           # Fork mode: no embedded turbo cache either, so no turbo artifact is
           # written to the Actions cache under the base branch's scope.

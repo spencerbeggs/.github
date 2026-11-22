@@ -49,14 +49,14 @@ jobs:
           persist-credentials: true
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/silk-runtime-action@v2
+        uses: savvy-web/silk-runtime-action@dev
         with:
           install-deps: true
           ignore-scripts: true
           turbo-api: https://cache.savvyweb.systems
 
       - name: Run release
-        uses: savvy-web/silk-release-action@v5
+        uses: savvy-web/silk-release-action@dev
         with:
           phase: branch-management
           app-client-id: ${{ vars.APP_CLIENT_ID }}
